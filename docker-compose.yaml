@@ -1,0 +1,82 @@
+# version: '3.9'
+
+services:
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.5.0
+    container_name: zookeeper
+    attach: false
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+     
+      ZOOKEEPER_TICK_TIME: 2000
+
+  kafka:
+    image: confluentinc/cp-kafka:7.5.0
+    container_name: kafka
+    attach: false
+    depends_on:
+      - zookeeper
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+    ports:
+      - "9092:9092"
+
+  source:
+    build:
+      context: ./worker
+      dockerfile: Dockerfile
+    container_name: source
+    environment:
+      GROUP_ID: source-group
+    volumes:
+      - ./input:/usr/src/app/input
+    command: ["node", "dist/index.js", "--source"]
+    depends_on:
+      - kafka
+
+  mapper:
+    build:
+      context: ./worker
+      dockerfile: Dockerfile
+    container_name: mapper
+    environment:
+      GROUP_ID: map-group
+    command: ["node", "dist/index.js", "--map"]
+    depends_on:
+      - kafka
+
+  shuffler:
+    build:
+      context: ./worker
+      dockerfile: Dockerfile
+    container_name: shuffler
+    environment:
+      GROUP_ID: shuffle-group
+    command: ["node", "dist/index.js", "--shuffle"]
+    depends_on:
+      - kafka
+
+  reducer:
+    build:
+      context: ./worker
+      dockerfile: Dockerfile
+    container_name: reducer
+    environment:
+      GROUP_ID: reduce-group
+    command: ["node", "dist/index.js", "--reduce"]
+    depends_on:
+      - kafka
+
+  output:
+    build:
+      context: ./worker
+      dockerfile: Dockerfile
+    container_name: output
+    volumes:
+      - ./output:/usr/src/app/output
+    command: ["node", "dist/index.js", "--output"]
+    depends_on:
+      - kafka
