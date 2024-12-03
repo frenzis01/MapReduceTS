@@ -23,6 +23,11 @@ services:
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
     ports:
       - "9092:9092"
+    healthcheck:
+      test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server", "localhost:9092"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
 
   source:
     build:
@@ -35,7 +40,8 @@ services:
       - ./input:/usr/src/app/input
     command: ["node", "dist/index.js", "--source"]
     depends_on:
-      - kafka
+      kafka:
+        condition: service_healthy
 
   mapper:
     build:
@@ -46,7 +52,8 @@ services:
       GROUP_ID: map-group
     command: ["node", "dist/index.js", "--map"]
     depends_on:
-      - kafka
+      kafka:
+        condition: service_healthy
 
   shuffler:
     build:
@@ -57,7 +64,8 @@ services:
       GROUP_ID: shuffle-group
     command: ["node", "dist/index.js", "--shuffle"]
     depends_on:
-      - kafka
+      kafka:
+        condition: service_healthy
 
   reducer:
     build:
@@ -68,7 +76,8 @@ services:
       GROUP_ID: reduce-group
     command: ["node", "dist/index.js", "--reduce"]
     depends_on:
-      - kafka
+      kafka:
+        condition: service_healthy
 
   output:
     build:
@@ -79,4 +88,5 @@ services:
       - ./output:/usr/src/app/output
     command: ["node", "dist/index.js", "--output"]
     depends_on:
-      - kafka
+      kafka:
+        condition: service_healthy
