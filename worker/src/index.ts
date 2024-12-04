@@ -51,8 +51,6 @@ async function listenForPipelineUpdates() {
             mapFn: eval(pipelineConfig.mapFn),
             reduceFn: eval(pipelineConfig.reduceFn),
          };
-         // console.log(`[Pipeline Update] Loaded pipeline: ${pipelineConfig.pipelineID} from group ${process.env.GROUP_ID}/${WORKER_ID}`);
-         // console.log(`[Pipeline Update] ${process.env.GROUP_ID}/${WORKER_ID} Loaded pipeline: ${JSON.stringify(pipelineConfig)}/${JSON.stringify(pipelineConfig.mapFn)}`);
          if (MODE === '--map' && unprocessedMessages[pipelineConfig.pipelineID]) {
             console.log(`[MAP MODE] Processing unprocessed messages for pipeline: ${pipelineConfig.pipelineID}`);
             unprocessedMessages[pipelineConfig.pipelineID].forEach(async (messageValue) => {
@@ -60,13 +58,6 @@ async function listenForPipelineUpdates() {
                await processMessageMap(messageValue, pipelines[pipelineConfig.pipelineID]);
             });
          }
-
-         // if (isConsumerPaused) {
-         //    isConsumerPaused = false;
-         //    console.log(`[Pipeline Update] Resuming consumer...`);
-         //    const MY_TOPIC = MODE === '--map' ? MAP_TOPIC : (MODE === '--shuffle' ? SHUFFLE_TOPIC : REDUCE_TOPIC);
-         //    await consumer.resume([{ topic: MY_TOPIC }]);
-         // }
 
       },
    });
@@ -167,14 +158,17 @@ async function sourceMode() {
 }
 
 let unprocessedMessages: { [pipelineID: string]: any[] } = {}; // Queue for messages with missing pipelineConfig
-let isConsumerPaused = false;
 
 function pipelineEnded(message: any): boolean {
-   const parsedMessage = JSON.parse(message.value.toString());
-   const tmp = message.key === PIPELINED_ENDED_KEY && parsedMessage.value.type === PIPELINE_ENDED_TYPE && parsedMessage.value.data === PIPELINE_ENDED_VALUE;
-   console.log(`[MAP MODE] Received message: ${message.key} -> ${JSON.stringify(parsedMessage)} | ${!parsedMessage || !message.key} | ${tmp}}`);
+   // console.log(`[PIPE_ENDED CHECK 0]`);
+   const parsedMessage = JSON.parse(message.value);
+   // console.log(`[PIPE_ENDED CHECK 01]`);
+   const tmp = (message.key && message.key.toString() === PIPELINED_ENDED_KEY) && parsedMessage.type === PIPELINE_ENDED_TYPE && parsedMessage.data === PIPELINE_ENDED_VALUE;
+   // console.log(`[PIPE_ENDED CHECK 02]`);
+   // console.log(`[PIPE_ENDED CHECK 1] ${message.key && message.key === PIPELINED_ENDED_KEY} | ${parsedMessage.value.type === PIPELINE_ENDED_TYPE} | ${parsedMessage.value.data === PIPELINE_ENDED_VALUE}`);
+   console.log(`[PIPE_ENDED CHECK 2] Received message: ${message.key} -> ${JSON.stringify(parsedMessage)} | ${!parsedMessage || !message.key} | ${tmp}}`);
    if (!parsedMessage || !message.key) return false;
-   return message.key === PIPELINED_ENDED_KEY && parsedMessage.value.type === PIPELINE_ENDED_TYPE && parsedMessage.value.data === PIPELINE_ENDED_VALUE;
+   return tmp;
 }
 
 // Map mode: Applies the map function to incoming messages
@@ -184,20 +178,18 @@ async function mapMode() {
 
    await producer.connect();
 
-
-   // if no pipelines, pause consumer
-   // if (Object.keys(pipelines).length === 0) {
-   //    isConsumerPaused = true;
-   //    console.log(`[ERROR] No pipelines found. Pausing consumer...`);
-   //    await consumer.pause([{ topic: MAP_TOPIC }]);
-   // }
    consumer.run({
       eachMessage: async ({ message }) => {
-         console.log(`[${MODE}/${WORKER_ID}] reading ${message.value?.toString()}`)
-         if (!message.value) return;
-
+         console.log(`[${MODE}/${WORKER_ID}] reading 00 ${message.value?.toString()}`)
+         console.log(`[${MODE}/${WORKER_ID}] reading 01 ${message.value?.toString()}`)
+         console.log(!message.value);
+         console.log(`[${MODE}/${WORKER_ID}] reading 02 ${message.value?.toString()}`)
+         if (!message.value) {
+            console.log(`[MAP MODE] No message value found. Skipping...`);  
+            return;
+         }
          if (pipelineEnded(message)) {
-            console.log(`[MAP MODE] Received pipeline ended message. Sending to shuffle...`);
+            console.log(`[MAP MODE] Received pipeline ended message. Propagating to shuffle...`);
             // Send to shuffle consumer special value to start feeding the reduce
             await producer.send({
                topic: SHUFFLE_TOPIC,
@@ -205,7 +197,7 @@ async function mapMode() {
             });
             return;
          }
-
+         console.log(`[${MODE}/${WORKER_ID}] reading 10 ${message.value?.toString()}`)
          const value = JSON.parse(message.value.toString());
          const pipelineID = value.pipelineID;
          const pipelineConfig = pipelines[pipelineID];
@@ -223,9 +215,11 @@ async function mapMode() {
 
             return; // Skip processing this message for now
          }
+         console.log(`[${MODE}/${WORKER_ID}] reading 20 ${message.value?.toString()}`)
 
          const mapResults = pipelineConfig.mapFn(data);
          for (const result of mapResults) {
+            // console.log(`[${MODE}/${WORKER_ID}] reading 30 ${message.value?.toString()}`)
             await producer.send({
                topic: SHUFFLE_TOPIC,
                messages: [{ key: pipelineConfig.keySelector(result), value: JSON.stringify({ type: PIPELINE_DATA_TYPE, data: result }) }],
@@ -264,13 +258,6 @@ async function shuffleMode() {
    await producer.connect();
    const keyValueStore: { [key: string]: string[] } = {};
 
-
-   // if no pipelines, pause consumer
-   // if (Object.keys(pipelines).length === 0) {
-   //    isConsumerPaused = true;
-   //    console.log(`[ERROR] No pipelines found. Pausing consumer...`);
-   //    await consumer.pause([{ topic: MAP_TOPIC }]);
-   // }
    consumer.run({
       eachMessage: async ({ message }) => {
          console.log(`[${MODE}/${WORKER_ID}] ${message.key?.toString()} ${message.value?.toString()}`)
@@ -310,13 +297,6 @@ async function reduceMode() {
 
    await producer.connect();
 
-
-   // if no pipelines, pause consumer
-   // if (Object.keys(pipelines).length === 0) {
-   //    isConsumerPaused = true;
-   //    console.log(`[ERROR] No pipelines found. Pausing consumer...`);
-   //    await consumer.pause([{ topic: MAP_TOPIC }]);
-   // }
    consumer.run({
       eachMessage: async ({ message }) => {
          console.log(`[${MODE}/${WORKER_ID}]`)
@@ -387,4 +367,10 @@ async function main() {
 
 main().catch((error) => {
    console.error(`[ERROR] ${error.message}`);
+   // If error is that kafka does not host the topic, wait and retry
+   if (error.message.includes('This server does not host this topic-partition')) {
+      setTimeout(() => {
+         main();
+      }, 5000);
+   }
 });

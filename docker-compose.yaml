@@ -23,8 +23,12 @@ services:
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
     ports:
       - "9092:9092"
+    volumes:
+      - ./kafka_healthcheck.sh:/kafka_healthcheck.sh
     healthcheck:
       test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server", "localhost:9092"]
+      # test: ["CMD-SHELL", "echo 'test-message' | kafka-console-producer.sh --broker-list localhost:9092 --topic health-check-topic && kafka-console-consumer.sh --bootstrap-server localhost:9092 --topic health-check-topic --from-beginning --max-messages 1 | grep 'test-message'"]
+      # test: ["CMD-SHELL", "sh /kafka_healthcheck.sh"]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -38,7 +42,7 @@ services:
       GROUP_ID: source-group
     volumes:
       - ./input:/usr/src/app/input
-    command: ["node", "dist/index.js", "--source"]
+    command: ["sh", "-c", "sleep 2 && node dist/index.js --source"]
     depends_on:
       kafka:
         condition: service_healthy
@@ -50,7 +54,7 @@ services:
     container_name: mapper
     environment:
       GROUP_ID: map-group
-    command: ["node", "dist/index.js", "--map"]
+    command: ["sh", "-c", "sleep 1 && node dist/index.js --map"]
     depends_on:
       kafka:
         condition: service_healthy
@@ -62,7 +66,7 @@ services:
     container_name: shuffler
     environment:
       GROUP_ID: shuffle-group
-    command: ["node", "dist/index.js", "--shuffle"]
+    command: ["sh", "-c", "sleep 1 && node dist/index.js --shuffle"]
     depends_on:
       kafka:
         condition: service_healthy
@@ -74,7 +78,7 @@ services:
     container_name: reducer
     environment:
       GROUP_ID: reduce-group
-    command: ["node", "dist/index.js", "--reduce"]
+    command: ["sh", "-c", "sleep 1 && node dist/index.js --reduce"]
     depends_on:
       kafka:
         condition: service_healthy
@@ -86,7 +90,7 @@ services:
     container_name: output
     volumes:
       - ./output:/usr/src/app/output
-    command: ["node", "dist/index.js", "--output"]
+    command: ["sh", "-c", "sleep 1 && node dist/index.js --output"]
     depends_on:
       kafka:
         condition: service_healthy
