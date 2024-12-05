@@ -1,17 +1,27 @@
+/**
+ * We are suppressing some errors related to installed modules,
+ * Since we will run everything in Docker, so no problem with the installed modules.
+ *  */
+// @ts-ignore
 import fs from 'fs';
+// @ts-ignore
 import path from 'path';
-import { Kafka, logLevel } from 'kafkajs';
+// @ts-ignore
+import { Kafka, logLevel, KafkaMessage } from 'kafkajs';
+
+// @ts-ignore
+const MODE = process.argv[2];
+// @ts-ignore
+const GROUP_ID = process.env.GROUP_ID || 'default-group';
 
 const kafka = new Kafka({
    clientId: 'mapreduce',
    brokers: ['kafka:9092'],
    logLevel: logLevel.NOTHING
 });
-
 const producer = kafka.producer();
-const consumer = kafka.consumer({ groupId: process.env.GROUP_ID || 'default-group' });
+const consumer = kafka.consumer({ groupId: GROUP_ID || 'default-group' });
 
-const MODE = process.argv[2];
 
 const INPUT_FOLDER = './input';
 const OUTPUT_FOLDER = './output';
@@ -24,6 +34,8 @@ const REDUCE_TOPIC = 'reduce-output';
 // Unique worker ID
 const WORKER_ID = `worker-${Math.random().toString(36).substring(2, 15)}`;
 
+// TODO we would like to parameterize for more robust type checking
+// Perhaps we cannot do it since this would break the "pipelines" definition
 interface PipelineConfig {
    pipelineID: string;
    keySelector: (message: any) => string;
@@ -41,8 +53,8 @@ async function listenForPipelineUpdates() {
    await pipelinesConsumer.subscribe({ topic: PIPELINE_UPDATE_TOPIC, fromBeginning: true });
 
    pipelinesConsumer.run({
-      eachMessage: async ({ message }) => {
-         console.log(`[Pipeline Update] [${process.env.GROUP_ID}/${WORKER_ID}] received msg with TS ${message.timestamp}`);
+      eachMessage: async ({ message }: { message: KafkaMessage }) => {
+         console.log(`[Pipeline Update] [${GROUP_ID}/${WORKER_ID}] received msg with TS ${message.timestamp}`);
          if (!message.value) return;
          const pipelineConfig = JSON.parse(message.value.toString());
          pipelines[pipelineConfig.pipelineID] = {
@@ -149,7 +161,7 @@ async function sourceMode() {
 
    let files = fs.readdirSync(INPUT_FOLDER);
    console.log(`[SOURCE MODE] Found ${files.length} existing files in ${INPUT_FOLDER}`);
-   files.forEach(async (file) => {
+   files.forEach(async (file: any) => {
       console.log(`[SOURCE MODE] Processing existing file: ${file} in ${INPUT_FOLDER}`);
       const filePath = path.join(INPUT_FOLDER, file);
       await processFile(filePath);
@@ -179,7 +191,7 @@ async function mapMode() {
    await producer.connect();
 
    consumer.run({
-      eachMessage: async ({ message }) => {
+      eachMessage: async ({ message }: { message: KafkaMessage }) => {
          console.log(`[${MODE}/${WORKER_ID}] reading 00 ${message.value?.toString()}`)
          console.log(`[${MODE}/${WORKER_ID}] reading 01 ${message.value?.toString()}`)
          console.log(!message.value);
@@ -259,7 +271,7 @@ async function shuffleMode() {
    const keyValueStore: { [key: string]: string[] } = {};
 
    consumer.run({
-      eachMessage: async ({ message }) => {
+      eachMessage: async ({ message }: { message: KafkaMessage }) => {
          console.log(`[${MODE}/${WORKER_ID}] ${message.key?.toString()} ${message.value?.toString()}`)
 
 
@@ -298,7 +310,7 @@ async function reduceMode() {
    await producer.connect();
 
    consumer.run({
-      eachMessage: async ({ message }) => {
+      eachMessage: async ({ message }: { message: KafkaMessage }) => {
          console.log(`[${MODE}/${WORKER_ID}]`)
          if (!message.value) return;
 
@@ -331,7 +343,7 @@ async function outputMode() {
    await consumer.subscribe({ topic: REDUCE_TOPIC, fromBeginning: true });
 
    consumer.run({
-      eachMessage: async ({ message }) => {
+      eachMessage: async ({ message }: { message: KafkaMessage }) => {
          console.log(`[${MODE}/${WORKER_ID}]`)
          const key = message.key?.toString();
          const value = message.value?.toString();
