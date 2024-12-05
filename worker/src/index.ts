@@ -27,9 +27,10 @@ const INPUT_FOLDER = './input';
 const OUTPUT_FOLDER = './output';
 
 const PIPELINE_UPDATE_TOPIC = 'pipeline-updates';
-const MAP_TOPIC = 'map-output';
-const SHUFFLE_TOPIC = 'shuffle-output';
-const REDUCE_TOPIC = 'reduce-output';
+const MAP_TOPIC = 'map-topic';
+const SHUFFLE_TOPIC = 'shuffle-topic';
+const REDUCE_TOPIC = 'reduce-topic';
+const OUTPUT_TOPIC = 'output-topic';
 
 // Unique worker ID
 const WORKER_ID = `worker-${Math.random().toString(36).substring(2, 15)}`;
@@ -152,7 +153,7 @@ async function sourceMode() {
          console.log(`[SOURCE MODE] Sending stream ended message to MAP...`);
          await producer.send({
             topic: MAP_TOPIC,
-            messages: [{ key: STREAM_ENDED_KEY, value: JSON.stringify({ type: STREAM_ENDED_TYPE, data: STREAM_ENDED_VALUE, pipelinedID: pipelineWordCount.pipelineID }), }],
+            messages: [{ key: STREAM_ENDED_KEY, value: JSON.stringify({ type: STREAM_ENDED_TYPE, data: STREAM_ENDED_VALUE, pipelineID: pipelineWordCount.pipelineID }), }],
          });
 
          // fs.unlinkSync(filePath); // Optionally remove the file after processing
@@ -210,7 +211,7 @@ async function mapMode() {
             // Send to shuffle consumer special value to start feeding the reduce
             await producer.send({
                topic: SHUFFLE_TOPIC,
-               messages: [{ key: STREAM_ENDED_KEY, value: JSON.stringify({ type: STREAM_ENDED_TYPE, data: STREAM_ENDED_VALUE, pipelineID: pipelineID}), }],
+               messages: [{ key: STREAM_ENDED_KEY, value: JSON.stringify({ "type": STREAM_ENDED_TYPE, "data": STREAM_ENDED_VALUE, "pipelineID": pipelineID}), }],
             });
             return;
          }
@@ -281,19 +282,22 @@ async function shuffleMode() {
 
          const value = JSON.parse(message.value.toString());
          const data = value.data;
+         const pipelineID = value.pipelineID;
          const key = message.key.toString();
+         console.log(`[${MODE}/${WORKER_ID}] -> ${key} -> ${data} | ${pipelineID}`)
 
          // IF not pipelineID, skip and retry later
 
          if (streamEnded(message)) {
             // Send stored values to reduce
             for (const key of Object.keys(keyValueStore)) {
+               const tmp = JSON.stringify({"pipelineID": pipelineID, "values": keyValueStore[key] });
                await producer.send({
                   topic: REDUCE_TOPIC,
-                  messages: [{ key, value: JSON.stringify({ key, values: keyValueStore[key], pipelineID: value.pipelineID }) }],
+                  messages: [{ "key":key, "value": tmp }],
                });
-               console.log(`[SHUFFLE MODE] Sending: ${key} -> ${JSON.stringify(keyValueStore[key])}`);
-               return;
+               console.log(tmp);
+               console.log(`[SHUFFLE MODE] Sending: ${key} -> ${tmp}`);
             }
          }
          if (!keyValueStore[key]) {
@@ -317,10 +321,12 @@ async function reduceMode() {
    consumer.run({
       eachMessage: async ({ message }: { message: KafkaMessage }) => {
          console.log(`[${MODE}/${WORKER_ID}]`)
-         if (!message.value) return;
+         if (!message.key || !message.value) return;
 
+         const key = message.key.toString();
          const value = JSON.parse(message.value.toString());
          // const list = value.values;
+         console.log(`[REDUCE MODE] Received: ${key} -> ${JSON.stringify(value)}`);
          const pipelineID = value.pipelineID;
          const pipelineConfig = pipelines[pipelineID];
 
@@ -332,12 +338,12 @@ async function reduceMode() {
 
          // At this point we are sure that the pipelineConfig is available, 
          // otherwise the message would not have been processed in map
-         const reducedResult = pipelineConfig.reduceFn(value.key, value.values);
-         console.log(`[REDUCE MODE] Reduced: ${value.key} -> ${reducedResult}`);
+         const reducedResult = pipelineConfig.reduceFn(key, value.values);
+         console.log(`[REDUCE MODE] Reduced: ${key} -> ${reducedResult}`);
 
          await producer.send({
-            topic: REDUCE_TOPIC,
-            messages: [{ key: value.key, value: JSON.stringify({res: reducedResult, pipelineID:pipelineID}) }],
+            topic: OUTPUT_TOPIC,
+            messages: [{ "key": key, value: JSON.stringify({res: reducedResult, "pipelineID":pipelineID}) }],
          });
       },
    });
@@ -347,7 +353,7 @@ async function reduceMode() {
 async function outputMode() {
    console.log('[OUTPUT MODE] Waiting for results to be written to output folder...');
    await consumer.connect();
-   await consumer.subscribe({ topic: REDUCE_TOPIC, fromBeginning: true });
+   await consumer.subscribe({ topic: OUTPUT_TOPIC, fromBeginning: true });
 
    consumer.run({
       eachMessage: async ({ message }: { message: KafkaMessage }) => {
