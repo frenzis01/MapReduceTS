@@ -109,10 +109,10 @@ const parsePipeline = (pipeline_str: string) => {
    };
 }
 
-const PIPELINED_ENDED_KEY = 'PIPELINE_ENDED';
-const PIPELINE_ENDED_TYPE = 'PIPELINE_ENDED';
-const PIPELINE_DATA_TYPE = 'PIPELINE_DATA';
-const PIPELINE_ENDED_VALUE = null;
+const STREAM_ENDED_KEY = 'STREAM_ENDED';
+const STREAM_ENDED_TYPE = 'STREAM_ENDED';
+const STREAM_DATA_TYPE = 'STREAM_DATA';
+const STREAM_ENDED_VALUE = null;
 // Source mode: Reads files from a folder and sends messages to Kafka
 async function sourceMode() {
    console.log('[SOURCE MODE] Monitoring input folder...');
@@ -149,10 +149,10 @@ async function sourceMode() {
          }
 
          // Send to shuffle consumer special value to start feeding the reduce
-         console.log(`[SOURCE MODE] Sending pipeline ended message to MAP...`);
+         console.log(`[SOURCE MODE] Sending stream ended message to MAP...`);
          await producer.send({
             topic: MAP_TOPIC,
-            messages: [{ key: PIPELINED_ENDED_KEY, value: JSON.stringify({ type: PIPELINE_ENDED_TYPE, data: PIPELINE_ENDED_VALUE }), }],
+            messages: [{ key: STREAM_ENDED_KEY, value: JSON.stringify({ type: STREAM_ENDED_TYPE, data: STREAM_ENDED_VALUE, pipelinedID: pipelineWordCount.pipelineID }), }],
          });
 
          // fs.unlinkSync(filePath); // Optionally remove the file after processing
@@ -171,15 +171,15 @@ async function sourceMode() {
 
 let unprocessedMessages: { [pipelineID: string]: any[] } = {}; // Queue for messages with missing pipelineConfig
 
-function pipelineEnded(message: any): boolean {
+function streamEnded(message: any): boolean {
    // console.log(`[PIPE_ENDED CHECK 0]`);
-   const parsedMessage = JSON.parse(message.value);
+   const value = JSON.parse(message.value);
    // console.log(`[PIPE_ENDED CHECK 01]`);
-   const tmp = (message.key && message.key.toString() === PIPELINED_ENDED_KEY) && parsedMessage.type === PIPELINE_ENDED_TYPE && parsedMessage.data === PIPELINE_ENDED_VALUE;
+   const tmp = (message.key && message.key.toString() === STREAM_ENDED_KEY) && value.type === STREAM_ENDED_TYPE && value.data === STREAM_ENDED_VALUE;
    // console.log(`[PIPE_ENDED CHECK 02]`);
-   // console.log(`[PIPE_ENDED CHECK 1] ${message.key && message.key === PIPELINED_ENDED_KEY} | ${parsedMessage.value.type === PIPELINE_ENDED_TYPE} | ${parsedMessage.value.data === PIPELINE_ENDED_VALUE}`);
-   console.log(`[PIPE_ENDED CHECK 2] Received message: ${message.key} -> ${JSON.stringify(parsedMessage)} | ${!parsedMessage || !message.key} | ${tmp}}`);
-   if (!parsedMessage || !message.key) return false;
+   // console.log(`[PIPE_ENDED CHECK 1] ${message.key && message.key === STREAM_ENDED_KEY} | ${value.value.type === STREAM_ENDED_TYPE} | ${value.value.data === STREAM_ENDED_VALUE}`);
+   if (!value || !message.key) return false;
+   if (tmp) console.log(`[PIPE_ENDED CHECK 2] Received message: ${message.key} -> ${JSON.stringify(value)} | ${!value || !message.key} | ${tmp}}`);
    return tmp;
 }
 
@@ -193,27 +193,28 @@ async function mapMode() {
    consumer.run({
       eachMessage: async ({ message }: { message: KafkaMessage }) => {
          console.log(`[${MODE}/${WORKER_ID}] reading 00 ${message.value?.toString()}`)
-         console.log(`[${MODE}/${WORKER_ID}] reading 01 ${message.value?.toString()}`)
-         console.log(!message.value);
-         console.log(`[${MODE}/${WORKER_ID}] reading 02 ${message.value?.toString()}`)
+         // console.log(`[${MODE}/${WORKER_ID}] reading 01 ${message.value?.toString()}`)
+         // console.log(!message.value);
+         // console.log(`[${MODE}/${WORKER_ID}] reading 02 ${message.value?.toString()}`)
          if (!message.value) {
             console.log(`[MAP MODE] No message value found. Skipping...`);  
             return;
          }
-         if (pipelineEnded(message)) {
-            console.log(`[MAP MODE] Received pipeline ended message. Propagating to shuffle...`);
-            // Send to shuffle consumer special value to start feeding the reduce
-            await producer.send({
-               topic: SHUFFLE_TOPIC,
-               messages: [{ key: PIPELINED_ENDED_KEY, value: JSON.stringify({ type: PIPELINE_ENDED_TYPE, data: PIPELINE_ENDED_VALUE }), }],
-            });
-            return;
-         }
-         console.log(`[${MODE}/${WORKER_ID}] reading 10 ${message.value?.toString()}`)
          const value = JSON.parse(message.value.toString());
          const pipelineID = value.pipelineID;
          const pipelineConfig = pipelines[pipelineID];
          const data = value.data;
+
+         if (streamEnded(message)) {
+            console.log(`[MAP MODE] Received stream ended message. Propagating to shuffle...`);
+            // Send to shuffle consumer special value to start feeding the reduce
+            await producer.send({
+               topic: SHUFFLE_TOPIC,
+               messages: [{ key: STREAM_ENDED_KEY, value: JSON.stringify({ type: STREAM_ENDED_TYPE, data: STREAM_ENDED_VALUE, pipelineID: pipelineID}), }],
+            });
+            return;
+         }
+         // console.log(`[${MODE}/${WORKER_ID}] reading 10 ${message.value?.toString()}`)
 
          if (!pipelineConfig) {
             console.log(`[ERROR] No pipeline found for ID: ${pipelineID}. Pausing consumer...`);
@@ -227,17 +228,17 @@ async function mapMode() {
 
             return; // Skip processing this message for now
          }
-         console.log(`[${MODE}/${WORKER_ID}] reading 20 ${message.value?.toString()}`)
+         // console.log(`[${MODE}/${WORKER_ID}] reading 20 ${message.value?.toString()}`)
 
-         const mapResults = pipelineConfig.mapFn(data);
-         for (const result of mapResults) {
-            // console.log(`[${MODE}/${WORKER_ID}] reading 30 ${message.value?.toString()}`)
-            await producer.send({
-               topic: SHUFFLE_TOPIC,
-               messages: [{ key: pipelineConfig.keySelector(result), value: JSON.stringify({ type: PIPELINE_DATA_TYPE, data: result }) }],
-            });
-         }
-         console.log(`[MAP MODE] Processed: ${data}`);
+         // const mapResults = pipelineConfig.mapFn(data);
+         // for (const result of mapResults) {
+         //    await producer.send({
+         //       topic: SHUFFLE_TOPIC,
+         //       messages: [{ key: pipelineConfig.keySelector(result), value: JSON.stringify({ type: STREAM_DATA_TYPE, data: result }) }],
+         //    });
+         // }
+         // console.log(`[MAP MODE] Processed: ${data}`);
+         await processMessageMap(data, pipelineConfig);
       },
    });
 }
@@ -252,15 +253,15 @@ async function processMessageMap(data: any, pipelineConfig: PipelineConfig) {
    for (const result of mapResults) {
       await producer.send({
          topic: SHUFFLE_TOPIC,
-         messages: [{ key: pipelineConfig.keySelector(result), value: JSON.stringify({ type: PIPELINE_DATA_TYPE, data: result }) }],
+         messages: [{ key: pipelineConfig.keySelector(result), value: JSON.stringify({ type: STREAM_DATA_TYPE, data: result, pipelineID: pipelineConfig.pipelineID}) }],
       });
    }
-   console.log(`[MAP MODE] Processed older: ${data}`);
+   console.log(`[MAP MODE] Processed: ${data}`);
 }
 
 
 /**
- * Shuffle mode: Groups messages by key, does not need the pipelineConfig
+ * Shuffle mode: Groups messages by key for each stream/pipeline
  * When it receives a special message, it sends all stored values to the reduce topic
  */
 async function shuffleMode() {
@@ -268,35 +269,39 @@ async function shuffleMode() {
    await consumer.subscribe({ topic: SHUFFLE_TOPIC, fromBeginning: true });
 
    await producer.connect();
+   // TODO add layer for each pipeline
    const keyValueStore: { [key: string]: string[] } = {};
 
    consumer.run({
       eachMessage: async ({ message }: { message: KafkaMessage }) => {
-         console.log(`[${MODE}/${WORKER_ID}] ${message.key?.toString()} ${message.value?.toString()}`)
-
+         console.log(`[${MODE}/${WORKER_ID}] -> ${!message.key || !message.value} | ${message.key?.toString()} ${message.value?.toString()}`)
 
          if (!message.key || !message.value) return;
-         if (pipelineEnded(message)) {
+
+
+         const value = JSON.parse(message.value.toString());
+         const data = value.data;
+         const key = message.key.toString();
+
+         // IF not pipelineID, skip and retry later
+
+         if (streamEnded(message)) {
             // Send stored values to reduce
             for (const key of Object.keys(keyValueStore)) {
                await producer.send({
                   topic: REDUCE_TOPIC,
-                  messages: [{ key, value: JSON.stringify({ key, values: keyValueStore[key] }) }],
+                  messages: [{ key, value: JSON.stringify({ key, values: keyValueStore[key], pipelineID: value.pipelineID }) }],
                });
                console.log(`[SHUFFLE MODE] Sending: ${key} -> ${JSON.stringify(keyValueStore[key])}`);
                return;
             }
          }
-
-         const messageValue = JSON.parse(message.value.toString());
-         const key = message.key.toString();
-
          if (!keyValueStore[key]) {
             keyValueStore[key] = [];
          }
-         keyValueStore[key].push(messageValue);
+         keyValueStore[key].push(data);
 
-         console.log(`[SHUFFLE MODE] Received: ${key} -> ${JSON.parse(messageValue)}`);
+         console.log(`[SHUFFLE MODE] Received: ${key} -> ${data}`);
 
       },
    });
@@ -314,23 +319,25 @@ async function reduceMode() {
          console.log(`[${MODE}/${WORKER_ID}]`)
          if (!message.value) return;
 
-         const messageValue = JSON.parse(message.value.toString());
-         const pipelineID = messageValue.pipelineID;
+         const value = JSON.parse(message.value.toString());
+         // const list = value.values;
+         const pipelineID = value.pipelineID;
          const pipelineConfig = pipelines[pipelineID];
 
          if (!pipelineConfig) {
             console.log(`[ERROR] No pipeline found for ID: ${pipelineID}`);
+            // TODO delay execution and retry
             return;
          }
 
          // At this point we are sure that the pipelineConfig is available, 
          // otherwise the message would not have been processed in map
-         const reducedResult = pipelineConfig.reduceFn(messageValue.key, messageValue.values);
-         console.log(`[REDUCE MODE] Reduced: ${messageValue.key} -> ${reducedResult}`);
+         const reducedResult = pipelineConfig.reduceFn(value.key, value.values);
+         console.log(`[REDUCE MODE] Reduced: ${value.key} -> ${reducedResult}`);
 
          await producer.send({
             topic: REDUCE_TOPIC,
-            messages: [{ key: messageValue.key, value: JSON.stringify(reducedResult) }],
+            messages: [{ key: value.key, value: JSON.stringify({res: reducedResult, pipelineID:pipelineID}) }],
          });
       },
    });
@@ -345,14 +352,15 @@ async function outputMode() {
    consumer.run({
       eachMessage: async ({ message }: { message: KafkaMessage }) => {
          console.log(`[${MODE}/${WORKER_ID}]`)
+         if (!message.value || !message.key) return;
          const key = message.key?.toString();
-         const value = message.value?.toString();
+         const value = JSON.parse(message.value.toString());
 
          if (key && value) {
             // const outputPath = path.join(OUTPUT_FOLDER, `result-${key}.txt`);
-            const outputPath = path.join(OUTPUT_FOLDER, `result.txt`);
-            fs.appendFileSync(outputPath, `${key}: ${value}\n`);
-            console.log(`[OUTPUT MODE] Wrote result: ${key}: ${value}`);
+            const outputPath = path.join(OUTPUT_FOLDER, `${value.pipelineID}_result.txt`);
+            fs.appendFileSync(outputPath, `${key}: ${value.res}\n`);
+            console.log(`[OUTPUT MODE] Wrote result: ${key}: ${value.res}`);
          }
       },
    });
