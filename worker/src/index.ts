@@ -81,7 +81,7 @@ const pipelineWordCount: PipelineConfig = {
    keySelector: (message: any) => message.word,
    mapFn: (value: any) => {
       console.log(`[MAP MODE] Mapping type of value: ${typeof value}:${JSON.stringify(value)}`);
-      const words = value.split(' ');
+      const words = value.split(/[^a-zA-Z0-9]+/);
       return words.map((word: string) => ({ word, count: 1 }));
    },
    reduceFn: (key: string, values: any[]) => {
@@ -271,7 +271,9 @@ async function shuffleMode() {
 
    await producer.connect();
    // TODO add layer for each pipeline
-   const keyValueStore: { [key: string]: string[] } = {};
+   // const keyValueStore: { [key: string]: string[] } = {};
+   // For each pipelineID, we store the key-value pairs
+   const keyValueStore: { [pipelineID: string]: { [key: string]: string[] } } = {};
 
    consumer.run({
       eachMessage: async ({ message }: { message: KafkaMessage }) => {
@@ -290,8 +292,8 @@ async function shuffleMode() {
 
          if (streamEnded(message)) {
             // Send stored values to reduce
-            for (const key of Object.keys(keyValueStore)) {
-               const tmp = JSON.stringify({"pipelineID": pipelineID, "values": keyValueStore[key] });
+            for (const key of Object.keys(keyValueStore[pipelineID])) {
+               const tmp = JSON.stringify({"pipelineID": pipelineID, "values": keyValueStore[pipelineID][key] });
                await producer.send({
                   topic: REDUCE_TOPIC,
                   messages: [{ "key":key, "value": tmp }],
@@ -300,10 +302,13 @@ async function shuffleMode() {
                console.log(`[SHUFFLE MODE] Sending: ${key} -> ${tmp}`);
             }
          }
-         if (!keyValueStore[key]) {
-            keyValueStore[key] = [];
+         if (!keyValueStore[pipelineID]) {
+            keyValueStore[pipelineID] = {};
          }
-         keyValueStore[key].push(data);
+         if (!keyValueStore[pipelineID][key]) {
+            keyValueStore[pipelineID][key] = [];
+         }
+         keyValueStore[pipelineID][key].push(data);
 
          console.log(`[SHUFFLE MODE] Received: ${key} -> ${data}`);
 
