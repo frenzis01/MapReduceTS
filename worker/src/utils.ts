@@ -47,11 +47,11 @@ interface PipelineConfig {
    reduceFn: (key: string, values: any[]) => any;
 }
 
-function newMessageValue(data: string, pipelineID: string): MessageValue {
+function newMessageValue(data: any, pipelineID: string): MessageValue {
    return {
       pipelineID: pipelineID,
       type: MessageType.STREAM_DATA,
-      data: data
+      data: JSON.stringify(data)
    };
 }
 

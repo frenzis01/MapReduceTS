@@ -14,8 +14,6 @@ const MODE = process.argv[2];
 // @ts-ignore
 const GROUP_ID = process.env.GROUP_ID || 'default-group';
 
-// import ./utils
-// import * as Utils from './utils';
 import {
    MessageType,
    MessageValue,
@@ -54,6 +52,7 @@ let pipelines: { [pipelineID: string]: PipelineConfig } = {};
 async function listenForPipelineUpdates() {
    // Use unique worker id so that every consumer in map/shuffle/reduce mode gets the pipeline updates
    const pipelinesConsumer = kafka.consumer({ groupId: WORKER_ID });
+   // TODO actually shuffler doesn't need pipelineConfig updates
    await pipelinesConsumer.connect();
    await pipelinesConsumer.subscribe({ topic: PIPELINE_UPDATE_TOPIC, fromBeginning: true });
 
@@ -177,6 +176,20 @@ async function sourceMode() {
 
 let unprocessedMessages: { [pipelineID: string]: any[] } = {}; // Queue for messages with missing pipelineConfig
 
+function enqueueUnprocessedMessage (pipelineID: string, data: string, key: string = "generic-record") {
+   // TODO pause consumer if no pipeline available
+   console.log(`[ERROR] No pipeline found for ID: ${pipelineID}. Pausing consumer...`);
+   // Add entry to unprocessedMessages queue if missing
+   if (!unprocessedMessages[pipelineID]) {
+      unprocessedMessages[pipelineID] = [];
+   }
+
+   // Add message to queue
+   unprocessedMessages[pipelineID].push(data);
+   // TODO check ordering of push+foreach
+
+   return; // Skip processing this message for now
+}
 
 // Map mode: Applies the map function to incoming messages
 async function mapMode() {
@@ -214,18 +227,22 @@ async function mapMode() {
          }
          // console.log(`[${MODE}/${WORKER_ID}] reading 10 ${message.value?.toString()}`)
 
-         if (!pipelineConfig) {
-            console.log(`[ERROR] No pipeline found for ID: ${pipelineID}. Pausing consumer...`);
-            // Add entry to unprocessedMessages queue if missing
-            if (!unprocessedMessages[pipelineID]) {
-               unprocessedMessages[pipelineID] = [];
-            }
+         // if (!pipelineConfig) {
+         //    // TODO pause consumer if no pipeline available
+         //    console.log(`[ERROR] No pipeline found for ID: ${pipelineID}. Pausing consumer...`);
+         //    // Add entry to unprocessedMessages queue if missing
+         //    if (!unprocessedMessages[pipelineID]) {
+         //       unprocessedMessages[pipelineID] = [];
+         //    }
 
-            // Add message to queue
-            unprocessedMessages[pipelineID].push(data);
+         //    // Add message to queue
+         //    unprocessedMessages[pipelineID].push(data);
 
-            return; // Skip processing this message for now
-         }
+         //    return; // Skip processing this message for now
+         // }
+
+         if (!pipelineConfig) enqueueUnprocessedMessage(pipelineID,data);
+         
          await processMessageMap(data, pipelineConfig);
       },
    });
@@ -247,6 +264,8 @@ async function processMessageMap(data: any, pipelineConfig: PipelineConfig) {
    }
    console.log(`[MAP MODE] Processed: ${data}`);
 }
+
+
 
 
 /**
@@ -276,7 +295,7 @@ async function shuffleMode() {
          const key = message.key.toString();
          console.log(`[${MODE}/${WORKER_ID}] -> ${key} -> ${data} | ${pipelineID}`)
 
-         // IF not pipelineID, skip and retry later
+         // IF not received this pipelinedID before, add it 
          if (!keyValueStore[pipelineID]) {
             keyValueStore[pipelineID] = {};
          }
@@ -327,6 +346,7 @@ async function reduceMode() {
          if (!pipelineConfig) {
             console.log(`[ERROR] No pipeline found for ID: ${pipelineID}`);
             // TODO delay execution and retry
+            // enqueueUnprocessedMessage(pipelineID)
             return;
          }
 
@@ -342,6 +362,12 @@ async function reduceMode() {
       },
    });
 }
+
+// function processMessageReduce(data: any, pipelineConfig: PipelineConfig, key: string) {
+//    const reducedResult = pipelineConfig.reduceFn();
+//    console.log(`[REDUCE MODE] Reduced: ${data.key} -> ${reducedResult}`);
+// }
+
 
 // Output mode: Writes reduced results to disk
 async function outputMode() {
