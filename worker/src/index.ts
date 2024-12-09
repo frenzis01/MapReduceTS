@@ -78,13 +78,13 @@ async function listenForPipelineUpdates() {
    });
 }
 
-function processUnprocessedMessages(pipelineID: string, callback: (arg0: any, arg1: PipelineConfig) => any) {
+function processUnprocessedMessages(pipelineID: string, callback: (key: string, val: MessageValue, pipelineConfig: PipelineConfig) => any) {
    if (!unprocessedMessages[pipelineID]) return;
    console.log(`[MAP MODE] Processing unprocessed messages for pipeline: ${pipelineID} | ${unprocessedMessages[pipelineID]?.length}`);
    // TODO make this async?
-   unprocessedMessages[pipelineID].forEach( (message: KafkaMessage) => {
-      console.log(`[MAP MODE] Processing unprocessed message: ${message.timestamp}`);
-       callback(message, pipelines[pipelineID]);
+   unprocessedMessages[pipelineID].forEach( (msg:{key: string, val: MessageValue, timestamp: any}) => {
+      console.log(`[MAP MODE] Processing unprocessed message: ${msg.timestamp}`);
+       callback(msg.key, msg.val, pipelines[pipelineID]);
    });
 }
 
@@ -176,7 +176,7 @@ async function sourceMode() {
 
 let unprocessedMessages: { [pipelineID: string]: any[] } = {}; // Queue for messages with missing pipelineConfig
 
-function enqueueUnprocessedMessage (pipelineID: string, data: string, key: string = "generic-record") {
+function enqueueUnprocessedMessage (pipelineID: string, val: MessageValue, key: string = "generic-record", timestamp: any = null) {
    // TODO pause consumer if no pipeline available
    console.log(`[ERROR] No pipeline found for ID: ${pipelineID}. Pausing consumer...`);
    // Add entry to unprocessedMessages queue if missing
@@ -185,7 +185,7 @@ function enqueueUnprocessedMessage (pipelineID: string, data: string, key: strin
    }
 
    // Add message to queue
-   unprocessedMessages[pipelineID].push(data);
+   unprocessedMessages[pipelineID].push({key, val, timestamp});
    // TODO check ordering of push+foreach
 
    return; // Skip processing this message for now
@@ -223,9 +223,9 @@ async function mapMode() {
 
          
          // TODO pause consumer if no pipeline available
-         if (!pipelineConfig) enqueueUnprocessedMessage(val.pipelineID,val.data);
+         if (!pipelineConfig) enqueueUnprocessedMessage(val.pipelineID,val.data,message.timestamp);
          
-         await processMessageMap(message, pipelineConfig);
+         await processMessageMap(key,val, pipelineConfig);
       },
    });
 }
@@ -236,10 +236,10 @@ async function mapMode() {
  * @param messageValue message.value
  * @param pipelineConfig this is here only to enforce that the pipelineConfig is passed in and should be available when processing
  */
-async function processMessageMap(message: KafkaMessage, pipelineConfig: PipelineConfig) {
+async function processMessageMap(key:string, val: MessageValue, pipelineConfig: PipelineConfig) {
    // TODO Why is toString() necessary? If i put raw data when sending i get an error.
    // But here I cannot assume that value is a string... Something ain't right.
-   const { key,val } = unboxKafkaMessage(message);
+   // const { key,val } = unboxKafkaMessage(message);
 
    // check if isStreamEndedMessage should not be necessary here...
    const mapResults = pipelineConfig.mapFn(val.data);
@@ -339,7 +339,7 @@ async function reduceMode() {
    });
 }
 
-// function processMessageReduce(data: any, pipelineConfig: PipelineConfig, key: string) {
+// function processMessageReduce(key: string, val: MessageValue, pipelineConfig: PipelineConfig) {
 //    const reducedResult = pipelineConfig.reduceFn();
 //    console.log(`[REDUCE MODE] Reduced: ${data.key} -> ${reducedResult}`);
 // }
