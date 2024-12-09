@@ -1,5 +1,3 @@
-// Define unified messages value field format
-
 
 enum MessageType {
    STREAM_ENDED = 'STREAM_ENDED',
@@ -10,11 +8,30 @@ enum MessageType {
 const STREAM_ENDED_KEY = 'STREAM_ENDED';
 const STREAM_ENDED_VALUE = null;
 
+// @ts-ignore
+import {KafkaMessage} from 'kafkajs';
 
+
+// Define unified messages value field format
 interface MessageValue {
    pipelineID: string;
    type: MessageType;
-   data: string | string[] | null;
+   data: any;
+}
+
+function unboxKafkaMessage(msg: KafkaMessage) {
+   // TODO kind of ugly
+   if (!msg || !msg.value) throw new Error(`[ERROR] Message value is null`);
+   const key = !msg.key ? "" : msg.key.toString();
+   if (isStreamEnded(msg)) return {key: key, val: JSON.parse(msg.value.toString())};
+   // TODO is this default empty string necessary?
+   const value = JSON.parse(msg.value.toString());
+   const pipelineID = value.pipelineID;
+   // const pipelineConfig = pipelines[pipelineID];
+   const data = value.data;   // JSON.parse(value.data) should not be necessary
+   const type = value.type;
+   const val : MessageValue = {pipelineID,type,data}
+   return {key, val}
 }
 
 function newStreamEndedMessage (pipelineID: string): MessageValue {
@@ -51,11 +68,12 @@ function newMessageValue(data: any, pipelineID: string): MessageValue {
    return {
       pipelineID: pipelineID,
       type: MessageType.STREAM_DATA,
-      data: JSON.stringify(data)
+      data: data
    };
 }
 
-function newMessageValueShuffled(data: string[], pipelineID: string): MessageValue {
+// TODO JSON stringify here or outside?
+function newMessageValueShuffled(data: any, pipelineID: string): MessageValue {
    return {
       pipelineID: pipelineID,
       type: MessageType.STREAM_SHUFFLED_DATA,
@@ -63,12 +81,6 @@ function newMessageValueShuffled(data: string[], pipelineID: string): MessageVal
    };
 }
 
-interface PipelineConfig {
-   pipelineID: string;
-   keySelector: (message: any) => string;
-   mapFn: (value: any) => any[];
-   reduceFn: (key: string, values: any[]) => any;
-}
 
 function stringifyPipeline (pipeline: PipelineConfig) :string {
    const tmp = {
@@ -83,6 +95,7 @@ function stringifyPipeline (pipeline: PipelineConfig) :string {
 export {
    MessageType,
    MessageValue,
+   unboxKafkaMessage,
    newStreamEndedMessage,
    isStreamEnded,
    newMessageValue,

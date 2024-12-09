@@ -17,6 +17,7 @@ const GROUP_ID = process.env.GROUP_ID || 'default-group';
 import {
    MessageType,
    MessageValue,
+   unboxKafkaMessage,
    newStreamEndedMessage,
    isStreamEnded,
    newMessageValue,
@@ -81,9 +82,9 @@ function processUnprocessedMessages(pipelineID: string, callback: (arg0: any, ar
    if (!unprocessedMessages[pipelineID]) return;
    console.log(`[MAP MODE] Processing unprocessed messages for pipeline: ${pipelineID} | ${unprocessedMessages[pipelineID]?.length}`);
    // TODO make this async?
-   unprocessedMessages[pipelineID].forEach( (messageValue) => {
-      console.log(`[MAP MODE] Processing unprocessed message: ${typeof messageValue}:${messageValue}`);
-       callback(messageValue, pipelines[pipelineID]);
+   unprocessedMessages[pipelineID].forEach( (message: KafkaMessage) => {
+      console.log(`[MAP MODE] Processing unprocessed message: ${message.timestamp}`);
+       callback(message, pipelines[pipelineID]);
    });
 }
 
@@ -127,6 +128,7 @@ async function sourceMode() {
    await pipelinesProducer.connect();
 
    // TODO make this customizable
+   // TODO move to another container
    console.log(`[SOURCE MODE] Sending pipelineID: ${JSON.stringify(pipelineWordCount.pipelineID)}`);
    await pipelinesProducer.send({
       topic: PIPELINE_UPDATE_TOPIC,
@@ -156,11 +158,9 @@ async function sourceMode() {
          console.log(`[SOURCE MODE] Sending stream ended message to MAP...`);
          await producer.send({
             topic: MAP_TOPIC,
-            // messages: [{ key: STREAM_ENDED_KEY, value: JSON.stringify({ type: STREAM_ENDED_TYPE, data: STREAM_ENDED_VALUE, pipelineID: pipelineWordCount.pipelineID }), }],
             messages: [{ key: STREAM_ENDED_KEY, value: JSON.stringify(newStreamEndedMessage(pipelineWordCount.pipelineID)), }],
          });
 
-         // fs.unlinkSync(filePath); // Optionally remove the file after processing
       }
    }
 
@@ -201,70 +201,56 @@ async function mapMode() {
    consumer.run({
       eachMessage: async ({ message }: { message: KafkaMessage }) => {
          console.log(`[${MODE}/${WORKER_ID}] reading 00 ${message.value?.toString()}`)
-         // console.log(`[${MODE}/${WORKER_ID}] reading 01 ${message.value?.toString()}`)
-         // console.log(!message.value);
-         // console.log(`[${MODE}/${WORKER_ID}] reading 02 ${message.value?.toString()}`)
          if (!message.value) {
             console.log(`[MAP MODE] No message value found. Skipping...`);
             return;
          }
-         const value = JSON.parse(message.value.toString());
-         const pipelineID = value.pipelineID;
-         const pipelineConfig = pipelines[pipelineID];
-         const data = value.data;
-
+         const { key, val } = unboxKafkaMessage(message);
+         const pipelineConfig = pipelines[val.pipelineID];
+         
          if (isStreamEnded(message)) {
             console.log(`[MAP MODE] Received stream ended message. Processing cached messages...`);
-            processUnprocessedMessages(pipelineID, processMessageMap);
+            processUnprocessedMessages(val.pipelineID, processMessageMap);
             
             console.log(`[MAP MODE] Propagating stream ended message to shuffle...`);
             // Send to shuffle consumer special value to start feeding the reduce
             await producer.send({
                topic: SHUFFLE_TOPIC,
-               messages: [{ key: STREAM_ENDED_KEY, value: JSON.stringify(newStreamEndedMessage(pipelineID)), }],
+               messages: [{ key: STREAM_ENDED_KEY, value: JSON.stringify(newStreamEndedMessage(val.pipelineID)), }],
             });
             return;
          }
-         // console.log(`[${MODE}/${WORKER_ID}] reading 10 ${message.value?.toString()}`)
 
-         // if (!pipelineConfig) {
-         //    // TODO pause consumer if no pipeline available
-         //    console.log(`[ERROR] No pipeline found for ID: ${pipelineID}. Pausing consumer...`);
-         //    // Add entry to unprocessedMessages queue if missing
-         //    if (!unprocessedMessages[pipelineID]) {
-         //       unprocessedMessages[pipelineID] = [];
-         //    }
-
-         //    // Add message to queue
-         //    unprocessedMessages[pipelineID].push(data);
-
-         //    return; // Skip processing this message for now
-         // }
-
-         if (!pipelineConfig) enqueueUnprocessedMessage(pipelineID,data);
          
-         await processMessageMap(data, pipelineConfig);
+         // TODO pause consumer if no pipeline available
+         if (!pipelineConfig) enqueueUnprocessedMessage(val.pipelineID,val.data);
+         
+         await processMessageMap(message, pipelineConfig);
       },
    });
 }
 
 /**
  * to be invoked on a message value ready to be processed in map mode
+ * We enforce this by explicitly passing the pipelineConfig.
  * @param messageValue message.value
  * @param pipelineConfig this is here only to enforce that the pipelineConfig is passed in and should be available when processing
  */
-async function processMessageMap(data: any, pipelineConfig: PipelineConfig) {
-   const mapResults = pipelineConfig.mapFn(data);
+async function processMessageMap(message: KafkaMessage, pipelineConfig: PipelineConfig) {
+   // TODO Why is toString() necessary? If i put raw data when sending i get an error.
+   // But here I cannot assume that value is a string... Something ain't right.
+   const { key,val } = unboxKafkaMessage(message);
+
+   // check if isStreamEndedMessage should not be necessary here...
+   const mapResults = pipelineConfig.mapFn(val.data);
    for (const result of mapResults) {
       await producer.send({
          topic: SHUFFLE_TOPIC,
-         // messages: [{ key: pipelineConfig.keySelector(result), value: JSON.stringify({ type: STREAM_DATA_TYPE, data: result, pipelineID: pipelineConfig.pipelineID }) }],
          messages: [{ key: pipelineConfig.keySelector(result), value: JSON.stringify(newMessageValue(result,pipelineConfig.pipelineID)) }],
       });
    }
-   console.log(`[MAP MODE] Processed: ${data}`);
+   console.log(`[MAP MODE] Processed: ${val.data}`);
 }
-
 
 
 
@@ -277,8 +263,6 @@ async function shuffleMode() {
    await consumer.subscribe({ topic: SHUFFLE_TOPIC, fromBeginning: true });
 
    await producer.connect();
-   // TODO add layer for each pipeline
-   // const keyValueStore: { [key: string]: string[] } = {};
    // For each pipelineID, we store the key-value pairs
    const keyValueStore: { [pipelineID: string]: { [key: string]: string[] } } = {};
 
@@ -288,13 +272,8 @@ async function shuffleMode() {
 
          if (!message.key || !message.value) return;
 
-
-         const value = JSON.parse(message.value.toString());
-         const data = value.data;
-         const pipelineID = value.pipelineID;
-         const key = message.key.toString();
-         console.log(`[${MODE}/${WORKER_ID}] -> ${key} -> ${data} | ${pipelineID}`)
-
+         const { key, val } = unboxKafkaMessage(message);
+         const pipelineID = val.pipelineID;
          // IF not received this pipelinedID before, add it 
          if (!keyValueStore[pipelineID]) {
             keyValueStore[pipelineID] = {};
@@ -316,9 +295,9 @@ async function shuffleMode() {
          if (!keyValueStore[pipelineID][key]) {
             keyValueStore[pipelineID][key] = [];
          }
-         keyValueStore[pipelineID][key].push(data);
+         keyValueStore[pipelineID][key].push(val.data);
 
-         console.log(`[SHUFFLE MODE] Received: ${key} -> ${JSON.stringify(data)}`);
+         console.log(`[SHUFFLE MODE] Received: ${key} -> ${JSON.stringify(val.data)}`);
 
       },
    });
@@ -336,28 +315,25 @@ async function reduceMode() {
          console.log(`[${MODE}/${WORKER_ID}]`)
          if (!message.key || !message.value) return;
 
-         const key = message.key.toString();
-         const value = JSON.parse(message.value.toString());
-         // const list = value.values;
-         console.log(`[REDUCE MODE] Received: ${key} -> ${JSON.stringify(value)}`);
-         const pipelineID = value.pipelineID;
-         const pipelineConfig = pipelines[pipelineID];
+
+         const {key,val} = unboxKafkaMessage(message);
+         const pipelineConfig = pipelines[val.pipelineID];
 
          if (!pipelineConfig) {
-            console.log(`[ERROR] No pipeline found for ID: ${pipelineID}`);
+            console.log(`[ERROR] No pipeline found for ID: ${val.pipelineID}`);
             // TODO delay execution and retry
-            // enqueueUnprocessedMessage(pipelineID)
+            // enqueueUnprocessedMessage(val.pipelineID)
             return;
          }
 
          // At this point we are sure that the pipelineConfig is available, 
          // otherwise the message would not have been processed in map
-         const reducedResult = pipelineConfig.reduceFn(key, value.data);
+         const reducedResult = pipelineConfig.reduceFn(key, val.data);
          console.log(`[REDUCE MODE] Reduced: ${key} -> ${reducedResult}`);
 
          await producer.send({
             topic: OUTPUT_TOPIC,
-            messages: [{ "key": key, value: JSON.stringify(newMessageValue(reducedResult,pipelineID)) }],
+            messages: [{ "key": key, value: JSON.stringify(newMessageValue(reducedResult,val.pipelineID)) }],
          });
       },
    });
@@ -399,6 +375,7 @@ async function main() {
       await listenForPipelineUpdates();
       await mapMode();
    } else if (MODE === '--shuffle') {
+      // TODO perhaps this may be avoided for shuffle
       await listenForPipelineUpdates();
       await shuffleMode();
    } else if (MODE === '--reduce') {
