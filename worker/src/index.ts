@@ -274,7 +274,7 @@ async function shuffleMode() {
 
          const { key, val } = unboxKafkaMessage(message);
          const pipelineID = val.pipelineID;
-         // IF not received this pipelinedID before, add it 
+         // IF not received this pipelineID before, add it 
          if (!keyValueStore[pipelineID]) {
             keyValueStore[pipelineID] = {};
          }
@@ -319,30 +319,37 @@ async function reduceMode() {
          const {key,val} = unboxKafkaMessage(message);
          const pipelineConfig = pipelines[val.pipelineID];
 
+         
+         // At this point we are almost sure that the pipelineConfig is available, 
+         // otherwise the message would not have been processed in map, there must have
+         // been a huge delay or some other issue related to the pipeline update message 
          if (!pipelineConfig) {
             console.log(`[ERROR] No pipeline found for ID: ${val.pipelineID}`);
             // TODO delay execution and retry
-            // enqueueUnprocessedMessage(val.pipelineID)
+            enqueueUnprocessedMessage(val.pipelineID, val,key, message.timestamp);
             return;
          }
+         processMessageReduce(key, val, pipelineConfig);
+         // const reducedResult = pipelineConfig.reduceFn(key, val.data);
+         // console.log(`[REDUCE MODE] Reduced: ${key} -> ${reducedResult}`);
 
-         // At this point we are sure that the pipelineConfig is available, 
-         // otherwise the message would not have been processed in map
-         const reducedResult = pipelineConfig.reduceFn(key, val.data);
-         console.log(`[REDUCE MODE] Reduced: ${key} -> ${reducedResult}`);
-
-         await producer.send({
-            topic: OUTPUT_TOPIC,
-            messages: [{ "key": key, value: JSON.stringify(newMessageValue(reducedResult,val.pipelineID)) }],
-         });
+         // await producer.send({
+         //    topic: OUTPUT_TOPIC,
+         //    messages: [{ "key": key, value: JSON.stringify(newMessageValue(reducedResult,val.pipelineID)) }],
+         // });
       },
    });
 }
 
-// function processMessageReduce(key: string, val: MessageValue, pipelineConfig: PipelineConfig) {
-//    const reducedResult = pipelineConfig.reduceFn();
-//    console.log(`[REDUCE MODE] Reduced: ${data.key} -> ${reducedResult}`);
-// }
+async function processMessageReduce(key: string, val: MessageValue,  pipelineConfig: PipelineConfig) {
+   const reducedResult = pipelineConfig.reduceFn(key, val.data);
+   console.log(`[REDUCE MODE] Reduced: ${key} -> ${reducedResult}`);
+
+   await producer.send({
+      topic: OUTPUT_TOPIC,
+      messages: [{ "key": key, value: JSON.stringify(newMessageValue(reducedResult,val.pipelineID)) }],
+   });
+}
 
 
 // Output mode: Writes reduced results to disk
