@@ -46,7 +46,8 @@ const pipelineWordCount: PipelineConfig = {
    keySelector: (message: any) => message.word,
    mapFn: (value: any) => {
       console.log(`[MAP MODE] Mapping type of value: ${typeof value}:${JSON.stringify(value)}`);
-      const words = value.split(/[^a-zA-Z0-9]+/);
+      // Filter is used to avoid having empty strings "" in the array	
+      const words = value.split(/[^a-zA-Z0-9]+/).filter(Boolean);
       return words.map((word: string) => ({ word, count: 1 }));
    },
    reduceFn: (key: string, values: any[]) => {

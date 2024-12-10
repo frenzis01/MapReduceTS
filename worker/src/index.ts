@@ -201,6 +201,7 @@ async function shuffleMode() {
                console.log(tmp);
                console.log(`[SHUFFLE MODE] Sending: ${key} -> ${tmp}`);
             }
+            return;
          }
          if (!keyValueStore[pipelineID][key]) {
             keyValueStore[pipelineID][key] = [];
