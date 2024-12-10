@@ -7,7 +7,6 @@ services:
     attach: false
     environment:
       ZOOKEEPER_CLIENT_PORT: 2181
-     
       ZOOKEEPER_TICK_TIME: 2000
 
   kafka:
@@ -83,11 +82,13 @@ services:
       kafka:
         condition: service_healthy
 
-  output:
+  sink:
     build:
-      context: ./worker
+      context: ./sink
       dockerfile: Dockerfile
-    container_name: output
+    container_name: sink
+    environment:
+      GROUP_ID: sink-group
     volumes:
       - ./output:/usr/src/app/output
     command: ["sh", "-c", "sleep 1 && node dist/index.js --output"]

@@ -3,10 +3,6 @@
  * Since we will run everything in Docker, so no problem with the installed modules.
  *  */
 // @ts-ignore
-import fs from 'fs';
-// @ts-ignore
-import path from 'path';
-// @ts-ignore
 import { Kafka, logLevel, KafkaMessage } from 'kafkajs';
 
 // @ts-ignore
@@ -35,9 +31,6 @@ const kafka = new Kafka({
 const producer = kafka.producer();
 const consumer = kafka.consumer({ groupId: GROUP_ID || 'default-group' });
 
-
-const INPUT_FOLDER = './input';
-const OUTPUT_FOLDER = './output';
 
 const PIPELINE_UPDATE_TOPIC = 'pipeline-updates';
 const MAP_TOPIC = 'map-topic';
@@ -90,19 +83,6 @@ function processUnprocessedMessages(pipelineID: string, callback: (key: string, 
       console.log(`[MAP MODE] Processing unprocessed message: ${msg.timestamp}`);
        callback(msg.key, msg.val, pipelines[pipelineID]);
    });
-}
-
-const pipelineWordCount: PipelineConfig = {
-   pipelineID: 'word-count',
-   keySelector: (message: any) => message.word,
-   mapFn: (value: any) => {
-      console.log(`[MAP MODE] Mapping type of value: ${typeof value}:${JSON.stringify(value)}`);
-      const words = value.split(/[^a-zA-Z0-9]+/);
-      return words.map((word: string) => ({ word, count: 1 }));
-   },
-   reduceFn: (key: string, values: any[]) => {
-      return values.reduce((acc, curr) => acc + curr.count, 0);
-   },
 }
 
 let unprocessedMessages: { [pipelineID: string]: any[] } = {}; // Queue for messages with missing pipelineConfig
@@ -249,7 +229,7 @@ async function reduceMode() {
          const {key,val} = unboxKafkaMessage(message);
          const pipelineConfig = pipelines[val.pipelineID];
 
-         
+
          // At this point we are almost sure that the pipelineConfig is available, 
          // otherwise the message would not have been processed in map, there must have
          // been a huge delay or some other issue related to the pipeline update message 
@@ -274,29 +254,6 @@ async function processMessageReduce(key: string, val: MessageValue,  pipelineCon
    });
 }
 
-
-// Output mode: Writes reduced results to disk
-async function outputMode() {
-   console.log('[OUTPUT MODE] Waiting for results to be written to output folder...');
-   await consumer.connect();
-   await consumer.subscribe({ topic: OUTPUT_TOPIC, fromBeginning: true });
-
-   consumer.run({
-      eachMessage: async ({ message }: { message: KafkaMessage }) => {
-         console.log(`[${MODE}/${WORKER_ID}]`)
-         if (!message.value || !message.key) return;
-         const key = message.key?.toString();
-         const value = JSON.parse(message.value.toString());
-
-         if (key && value) {
-            const outputPath = path.join(OUTPUT_FOLDER, `${value.pipelineID}_result.txt`);
-            fs.appendFileSync(outputPath, `${key}: ${value.data}\n`);
-            console.log(`[OUTPUT MODE] Wrote result: ${key}: ${value.data}`);
-         }
-      },
-   });
-}
-
 async function main() {
    if (MODE === '--map') {
       await listenForPipelineUpdates();
@@ -308,10 +265,8 @@ async function main() {
    } else if (MODE === '--reduce') {
       await listenForPipelineUpdates();
       await reduceMode();
-   } else if (MODE === '--output') {
-      await outputMode();
    } else {
-      console.log('[ERROR] No valid mode provided. Use --source, --map, --shuffle, --reduce, or --output.');
+      console.log('[ERROR] No valid mode provided. Use --map, --shuffle, or  --reduce.');
    }
 }
 
