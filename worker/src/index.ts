@@ -105,62 +105,6 @@ const pipelineWordCount: PipelineConfig = {
    },
 }
 
-// Source mode: Reads files from a folder and sends messages to Kafka
-async function sourceMode() {
-   console.log('[SOURCE MODE] Monitoring input folder...');
-   await producer.connect();
-   console.log('[SOURCE MODE] Connected to producer...');
-
-   const pipelinesProducer = kafka.producer();
-   await pipelinesProducer.connect();
-
-   // TODO make this customizable
-   // TODO move to another container
-   console.log(`[SOURCE MODE] Sending pipelineID: ${JSON.stringify(pipelineWordCount.pipelineID)}`);
-   await pipelinesProducer.send({
-      topic: PIPELINE_UPDATE_TOPIC,
-      messages: [{ value: stringifyPipeline(pipelineWordCount) }],
-   });
-   console.log(`[SOURCE MODE] Sent pipelineID: ${JSON.stringify(pipelineWordCount.pipelineID)}`);
-
-   const processFile = async (filePath: string) => {
-      console.log(`[SOURCE MODE] Processing file: ${filePath}/${fs.existsSync(filePath)}`);
-      if (fs.existsSync(filePath)) {
-         console.log(`[SOURCE MODE] Found new file: ${filePath}`);
-         const fileContent = fs.readFileSync(filePath, 'utf-8');
-         const data = fileContent.split('\n')
-
-
-         data.forEach(async (record: any, index: number) => {
-            console.log(`[SOURCE MODE] type of record : ${typeof record}`);
-            await producer.send({
-               topic: MAP_TOPIC,
-               // We add an index to the key so that Kafka partitioning works correctly
-               messages: [{ key: "source-record-"+index, value: JSON.stringify(newMessageValue(record,pipelineWordCount.pipelineID)) }],
-            });
-            console.log(`[SOURCE MODE] Sent record: ${JSON.stringify(record)}`);
-         });
-
-         // Send to shuffle consumer special value to start feeding the reduce
-         console.log(`[SOURCE MODE] Sending stream ended message to MAP...`);
-         await producer.send({
-            topic: MAP_TOPIC,
-            messages: [{ key: STREAM_ENDED_KEY, value: JSON.stringify(newStreamEndedMessage(pipelineWordCount.pipelineID)), }],
-         });
-
-      }
-   }
-
-   let files = fs.readdirSync(INPUT_FOLDER);
-   console.log(`[SOURCE MODE] Found ${files.length} existing files in ${INPUT_FOLDER}`);
-   files.forEach(async (file: any) => {
-      console.log(`[SOURCE MODE] Processing existing file: ${file} in ${INPUT_FOLDER}`);
-      const filePath = path.join(INPUT_FOLDER, file);
-      await processFile(filePath);
-   });
-
-}
-
 let unprocessedMessages: { [pipelineID: string]: any[] } = {}; // Queue for messages with missing pipelineConfig
 
 function enqueueUnprocessedMessage (pipelineID: string, val: MessageValue, key: string, timestamp: any = null) {
@@ -354,9 +298,7 @@ async function outputMode() {
 }
 
 async function main() {
-   if (MODE === '--source') {
-      await sourceMode();
-   } else if (MODE === '--map') {
+   if (MODE === '--map') {
       await listenForPipelineUpdates();
       await mapMode();
    } else if (MODE === '--shuffle') {
