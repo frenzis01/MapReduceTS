@@ -21,10 +21,13 @@ interface MessageValue {
 
 function unboxKafkaMessage(msg: KafkaMessage) {
    // TODO kind of ugly
+   // msg.value is null when stream ends... Why is this not triggered?
+   // Perhaps the null I inject when sending is "hidden" inside the Buffer<ArrayBufferLike> object?
    if (!msg || !msg.value) throw new Error(`[ERROR] Message value is null`);
-   const key = !msg.key ? "" : msg.key.toString();
-   if (isStreamEnded(msg)) return {key: key, val: JSON.parse(msg.value.toString())};
    // TODO is this default empty string necessary?
+   const key = !msg.key ? "" : "" + msg.key.toString();
+   if (isStreamEnded(msg)) return {key: key, val: JSON.parse(msg.value.toString())};
+   // TODO Why is toString() necessary? If i put raw data when sending i get an error.
    const value = JSON.parse(msg.value.toString());
    const pipelineID = value.pipelineID;
    // const pipelineConfig = pipelines[pipelineID];
@@ -42,9 +45,15 @@ function newStreamEndedMessage (pipelineID: string): MessageValue {
    };
 } 
 
-function isStreamEnded (message: any): boolean {
+function isStreamEnded (message: KafkaMessage): boolean {
    try {
-      const value = JSON.parse(message.value);
+      // TODO Why is toString() NOT necessary?
+      // const value = message.value === STREAM_ENDED_VALUE ? message.value : JSON.parse(message.value.toString());
+      let value;
+      if (message.value)
+         value = JSON.parse(message.value.toString());
+      else
+         value = null;
       if (!value || !message.key) return false;
       const tmp = (message.key && message.key.toString() === STREAM_ENDED_KEY) && value.type === MessageType.STREAM_ENDED && value.data === STREAM_ENDED_VALUE;
       if (tmp) console.log(`[STREAM_ENDED] Stream ${value.pipelineID}`);
@@ -101,5 +110,6 @@ export {
    newMessageValue,
    newMessageValueShuffled,
    PipelineConfig,
-   stringifyPipeline
+   stringifyPipeline,
+   STREAM_ENDED_KEY
 }

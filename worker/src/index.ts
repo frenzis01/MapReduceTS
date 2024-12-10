@@ -23,7 +23,8 @@ import {
    newMessageValue,
    newMessageValueShuffled,
    PipelineConfig,
-   stringifyPipeline
+   stringifyPipeline,
+   STREAM_ENDED_KEY
 } from './utils';
 
 const kafka = new Kafka({
@@ -73,6 +74,9 @@ async function listenForPipelineUpdates() {
          if (MODE === '--map' && unprocessedMessages[pipelineConfig.pipelineID]) {
             processUnprocessedMessages(pipelineConfig.pipelineID,processMessageMap);
          }
+         else if (MODE === '--reduce' && unprocessedMessages[pipelineConfig.pipelineID]) {
+            processUnprocessedMessages(pipelineConfig.pipelineID, processMessageReduce)
+         }
 
       },
    });
@@ -101,23 +105,6 @@ const pipelineWordCount: PipelineConfig = {
    },
 }
 
-
-
-// TODO remove or use in pipelineUpdates
-const parsePipeline = (pipeline_str: string) => {
-   const pipelineConfig = JSON.parse(pipeline_str);
-   return {
-      pipelineID: pipelineConfig.pipelineID,
-      keySelector: eval(pipelineConfig.keySelector),
-      mapFn: eval(pipelineConfig.mapFn),
-      reduceFn: eval(pipelineConfig.reduceFn),
-   };
-}
-
-const STREAM_ENDED_KEY = 'STREAM_ENDED';
-const STREAM_ENDED_TYPE = 'STREAM_ENDED';
-const STREAM_DATA_TYPE = 'STREAM_DATA';
-const STREAM_ENDED_VALUE = null;
 // Source mode: Reads files from a folder and sends messages to Kafka
 async function sourceMode() {
    console.log('[SOURCE MODE] Monitoring input folder...');
@@ -144,15 +131,15 @@ async function sourceMode() {
          const data = fileContent.split('\n')
 
 
-         for (const record of data) {
+         data.forEach(async (record: any, index: number) => {
             console.log(`[SOURCE MODE] type of record : ${typeof record}`);
             await producer.send({
                topic: MAP_TOPIC,
-               // TODO optional add index to record, but consider performance
-               messages: [{ key: "source-record", value: JSON.stringify(newMessageValue(record,pipelineWordCount.pipelineID)) }],
+               // We add an index to the key so that Kafka partitioning works correctly
+               messages: [{ key: "source-record-"+index, value: JSON.stringify(newMessageValue(record,pipelineWordCount.pipelineID)) }],
             });
             console.log(`[SOURCE MODE] Sent record: ${JSON.stringify(record)}`);
-         }
+         });
 
          // Send to shuffle consumer special value to start feeding the reduce
          console.log(`[SOURCE MODE] Sending stream ended message to MAP...`);
@@ -176,7 +163,7 @@ async function sourceMode() {
 
 let unprocessedMessages: { [pipelineID: string]: any[] } = {}; // Queue for messages with missing pipelineConfig
 
-function enqueueUnprocessedMessage (pipelineID: string, val: MessageValue, key: string = "generic-record", timestamp: any = null) {
+function enqueueUnprocessedMessage (pipelineID: string, val: MessageValue, key: string, timestamp: any = null) {
    // TODO pause consumer if no pipeline available
    console.log(`[ERROR] No pipeline found for ID: ${pipelineID}. Pausing consumer...`);
    // Add entry to unprocessedMessages queue if missing
@@ -199,6 +186,8 @@ async function mapMode() {
    await producer.connect();
 
    consumer.run({
+      // TODO
+      // partitionsConsumedConcurrently: 3, // Default: 1
       eachMessage: async ({ message }: { message: KafkaMessage }) => {
          console.log(`[${MODE}/${WORKER_ID}] reading 00 ${message.value?.toString()}`)
          if (!message.value) {
@@ -223,7 +212,7 @@ async function mapMode() {
 
          
          // TODO pause consumer if no pipeline available
-         if (!pipelineConfig) enqueueUnprocessedMessage(val.pipelineID,val.data,message.timestamp);
+         if (!pipelineConfig) enqueueUnprocessedMessage(val.pipelineID,val,key,message.timestamp);
          
          await processMessageMap(key,val, pipelineConfig);
       },
@@ -233,14 +222,11 @@ async function mapMode() {
 /**
  * to be invoked on a message value ready to be processed in map mode
  * We enforce this by explicitly passing the pipelineConfig.
+ * @param key is present only to match the signature of processMessageReduce
  * @param messageValue message.value
  * @param pipelineConfig this is here only to enforce that the pipelineConfig is passed in and should be available when processing
  */
 async function processMessageMap(key:string, val: MessageValue, pipelineConfig: PipelineConfig) {
-   // TODO Why is toString() necessary? If i put raw data when sending i get an error.
-   // But here I cannot assume that value is a string... Something ain't right.
-   // const { key,val } = unboxKafkaMessage(message);
-
    // check if isStreamEndedMessage should not be necessary here...
    const mapResults = pipelineConfig.mapFn(val.data);
    for (const result of mapResults) {
@@ -330,13 +316,6 @@ async function reduceMode() {
             return;
          }
          processMessageReduce(key, val, pipelineConfig);
-         // const reducedResult = pipelineConfig.reduceFn(key, val.data);
-         // console.log(`[REDUCE MODE] Reduced: ${key} -> ${reducedResult}`);
-
-         // await producer.send({
-         //    topic: OUTPUT_TOPIC,
-         //    messages: [{ "key": key, value: JSON.stringify(newMessageValue(reducedResult,val.pipelineID)) }],
-         // });
       },
    });
 }
@@ -366,7 +345,6 @@ async function outputMode() {
          const value = JSON.parse(message.value.toString());
 
          if (key && value) {
-            // const outputPath = path.join(OUTPUT_FOLDER, `result-${key}.txt`);
             const outputPath = path.join(OUTPUT_FOLDER, `${value.pipelineID}_result.txt`);
             fs.appendFileSync(outputPath, `${key}: ${value.data}\n`);
             console.log(`[OUTPUT MODE] Wrote result: ${key}: ${value.data}`);
@@ -383,7 +361,7 @@ async function main() {
       await mapMode();
    } else if (MODE === '--shuffle') {
       // TODO perhaps this may be avoided for shuffle
-      await listenForPipelineUpdates();
+      // await listenForPipelineUpdates();
       await shuffleMode();
    } else if (MODE === '--reduce') {
       await listenForPipelineUpdates();
