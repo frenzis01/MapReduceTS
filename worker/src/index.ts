@@ -68,7 +68,7 @@ async function listenForPipelineUpdates() {
          console.log(`${pipelineConfig.pipelineID} | ${!unprocessedMessages[pipelineConfig.pipelineID]}`);
          // TODO remove prints
          if (MODE === '--map' && unprocessedMessages[pipelineConfig.pipelineID]) {
-            processUnprocessedMessages(pipelineConfig,processMessageMap);
+            processUnprocessedMessages(pipelineConfig, processMessageMap);
          }
          else if (MODE === '--reduce' && unprocessedMessages[pipelineConfig.pipelineID]) {
             processUnprocessedMessages(pipelineConfig, processMessageReduce)
@@ -87,7 +87,7 @@ function processUnprocessedMessages(pipelineConfig: PipelineConfig, callback: (m
       if (!msg) { // TODO should not happen... right? 
          console.log(`[ERROR] No message found in unprocessedMessages`);
          return;
-      } 
+      }
       console.log(`[MAP MODE] Processing unprocessed message: ${msg.timestamp}`);
       callback(msg, pipelines[pipelineID]);
    }
@@ -95,7 +95,7 @@ function processUnprocessedMessages(pipelineConfig: PipelineConfig, callback: (m
 
 let unprocessedMessages: { [pipelineID: string]: KafkaMessage[] } = {}; // Queue for messages with missing pipelineConfig
 
-function enqueueUnprocessedMessage (message: KafkaMessage, pipelineID: string) {
+function enqueueUnprocessedMessage(message: KafkaMessage, pipelineID: string) {
    // TODO pause consumer if no pipeline available
    console.log(`[${WORKER_ID}][ERROR] No pipeline found for ID: ${pipelineID}. Delaying message processing`);
    // Add entry to unprocessedMessages queue if missing
@@ -120,7 +120,7 @@ function getPipelineID(input: string): string | null {
    // with key being any string that does not contain a double underscore __
    const splitPattern = new RegExp(
       `__(source-record__\\d+|${STREAM_ENDED_KEY}|shuffle-record__[^_]+(?:_[^_]+)*)$`
-  );
+   );
    // Split the input string using the regular expression
    const parts = input.split(splitPattern);
 
@@ -151,15 +151,15 @@ async function mapMode() {
          const pipelineID = getPipelineID(message.key.toString());
          if (!pipelineID) return; // Throw error?
          const pipelineConfig = pipelines[pipelineID];
-         
-         
+
+
          // TODO need to handle stream_ended_key
          // TODO pause consumer if no pipeline available
          if (!pipelineConfig) {
             enqueueUnprocessedMessage(message, pipelineID);
             return;
          }
-         
+
          await processMessageMap(message, pipelineConfig);
       },
    });
@@ -225,7 +225,7 @@ async function shuffleMode() {
             // Send stored values to reduce
             for (const key of Object.keys(keyValueStore[pipelineID])) {
                // Remove tmp
-               const tmp = JSON.stringify(newMessageValueShuffled(keyValueStore[pipelineID][key],pipelineID));
+               const tmp = JSON.stringify(newMessageValueShuffled(keyValueStore[pipelineID][key], pipelineID));
                await producer.send({
                   topic: REDUCE_TOPIC,
                   messages: [{ "key": `${pipelineID}__shuffle-record__${key}`, "value": tmp }],
@@ -269,8 +269,8 @@ async function reduceMode() {
          // otherwise the message would not have been processed in map, there must have
          // been a huge delay or some other issue related to the pipeline update message 
          if (!pipelineConfig) {
-         console.log("reduce 20");
-         enqueueUnprocessedMessage(message, pipelineID);
+            console.log("reduce 20");
+            enqueueUnprocessedMessage(message, pipelineID);
             return;
          }
          console.log("reduce 30");
@@ -279,7 +279,7 @@ async function reduceMode() {
    });
 }
 
-async function processMessageReduce(message: KafkaMessage,  pipelineConfig: PipelineConfig) {
+async function processMessageReduce(message: KafkaMessage, pipelineConfig: PipelineConfig) {
    const { key, val } = unboxKafkaMessage(message);
 
    if (key.toString().split('__').length !== 3) {
@@ -294,7 +294,7 @@ async function processMessageReduce(message: KafkaMessage,  pipelineConfig: Pipe
 
    await producer.send({
       topic: OUTPUT_TOPIC,
-      messages: [{ "key": word, value: JSON.stringify(newMessageValue(reducedResult,val.pipelineID)) }],
+      messages: [{ "key": word, value: JSON.stringify(newMessageValue(reducedResult, val.pipelineID)) }],
    });
 }
 

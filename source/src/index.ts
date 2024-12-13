@@ -87,7 +87,7 @@ async function sourceMode() {
             await producer.send({
                topic: MAP_TOPIC,
                // We add an index to the key so that Kafka partitioning works correctly
-               messages: [{ key: pipelineID+"__source-record__"+index, value: JSON.stringify(newMessageValue(record,pipelineID)) }],
+               messages: [{ key: pipelineID + "__source-record__" + index, value: JSON.stringify(newMessageValue(record, pipelineID)) }],
             });
             console.log(`[SOURCE MODE] Sent record: ${JSON.stringify(record)}`);
          });

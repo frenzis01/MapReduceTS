@@ -9,7 +9,7 @@ const STREAM_ENDED_KEY = 'STREAM_ENDED';
 const STREAM_ENDED_VALUE = null;
 
 // @ts-ignore
-import {KafkaMessage} from 'kafkajs';
+import { KafkaMessage } from 'kafkajs';
 
 
 // Define unified messages value field format
@@ -26,32 +26,32 @@ function unboxKafkaMessage(msg: KafkaMessage) {
    if (!msg || !msg.value) throw new Error(`[ERROR] Message value is null`);
    // TODO is this default empty string necessary?
    const key = !msg.key ? "" : "" + msg.key.toString();
-   if (isStreamEnded(msg)) return {key: key, val: JSON.parse(msg.value.toString())};
+   if (isStreamEnded(msg)) return { key: key, val: JSON.parse(msg.value.toString()) };
    // TODO Why is toString() necessary? If i put raw data when sending i get an error.
    const value = JSON.parse(msg.value.toString());
    const pipelineID = value.pipelineID;
    // const pipelineConfig = pipelines[pipelineID];
    const data = value.data;   // JSON.parse(value.data) should not be necessary
    const type = value.type;
-   const val : MessageValue = {pipelineID,type,data}
-   return {key, val}
+   const val: MessageValue = { pipelineID, type, data }
+   return { key, val }
 }
 
-function newStreamEndedMessage (pipelineID: string): MessageValue {
+function newStreamEndedMessage(pipelineID: string): MessageValue {
    return {
       pipelineID: pipelineID,
       type: MessageType.STREAM_ENDED,
       data: STREAM_ENDED_VALUE
    };
-} 
+}
 
 function isStreamEndedKey(str: string): boolean {
    const regex = new RegExp(`^[^_]*[^_]__${STREAM_ENDED_KEY}$`);
    // The string must match the regex and there must be only one __delimiter
-   return regex.test(str) && (str.split("__").length -1 === 1);
+   return regex.test(str) && (str.split("__").length - 1 === 1);
 }
 
-function isStreamEnded (message: KafkaMessage): boolean {
+function isStreamEnded(message: KafkaMessage): boolean {
    try {
       // TODO Why is toString() NOT necessary?
       // const value = message.value === STREAM_ENDED_VALUE ? message.value : JSON.parse(message.value.toString());
@@ -95,7 +95,7 @@ function newMessageValueShuffled(data: any, pipelineID: string): MessageValue {
 }
 
 
-function stringifyPipeline (pipeline: PipelineConfig) :string {
+function stringifyPipeline(pipeline: PipelineConfig): string {
    const tmp = {
       pipelineID: pipeline.pipelineID,
       keySelector: pipeline.keySelector.toString(),
