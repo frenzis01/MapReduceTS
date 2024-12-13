@@ -57,6 +57,7 @@ const pipelineWordCount: PipelineConfig = {
 
 // Source mode: Reads files from a folder and sends messages to Kafka
 async function sourceMode() {
+   await new Promise(f => setTimeout(f, 1000));
    console.log('[SOURCE MODE] Monitoring input folder...');
    await producer.connect();
    console.log('[SOURCE MODE] Connected to producer...');
@@ -79,14 +80,14 @@ async function sourceMode() {
          console.log(`[SOURCE MODE] Found new file: ${filePath}`);
          const fileContent = fs.readFileSync(filePath, 'utf-8');
          const data = fileContent.split('\n')
-
+         const pipelineID = pipelineWordCount.pipelineID;
 
          data.forEach(async (record: any, index: number) => {
             console.log(`[SOURCE MODE] type of record : ${typeof record}`);
             await producer.send({
                topic: MAP_TOPIC,
                // We add an index to the key so that Kafka partitioning works correctly
-               messages: [{ key: "source-record-"+index, value: JSON.stringify(newMessageValue(record,pipelineWordCount.pipelineID)) }],
+               messages: [{ key: pipelineID+"__source-record__"+index, value: JSON.stringify(newMessageValue(record,pipelineID)) }],
             });
             console.log(`[SOURCE MODE] Sent record: ${JSON.stringify(record)}`);
          });
@@ -95,7 +96,7 @@ async function sourceMode() {
          console.log(`[SOURCE MODE] Sending stream ended message to MAP...`);
          await producer.send({
             topic: MAP_TOPIC,
-            messages: [{ key: STREAM_ENDED_KEY, value: JSON.stringify(newStreamEndedMessage(pipelineWordCount.pipelineID)), }],
+            messages: [{ key: `${pipelineID}__${STREAM_ENDED_KEY}`, value: JSON.stringify(newStreamEndedMessage(pipelineID)), }],
          });
 
       }

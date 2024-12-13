@@ -64,43 +64,72 @@ async function listenForPipelineUpdates() {
          };
 
          console.log(`[Pipeline Update] [${GROUP_ID}/${WORKER_ID}] Updated pipeline: ${pipelineConfig.pipelineID}`);
+         console.log(JSON.stringify(Object.keys(unprocessedMessages)));
+         console.log(`${pipelineConfig.pipelineID} | ${!unprocessedMessages[pipelineConfig.pipelineID]}`);
+         // TODO remove prints
          if (MODE === '--map' && unprocessedMessages[pipelineConfig.pipelineID]) {
-            processUnprocessedMessages(pipelineConfig.pipelineID,processMessageMap);
+            processUnprocessedMessages(pipelineConfig,processMessageMap);
          }
          else if (MODE === '--reduce' && unprocessedMessages[pipelineConfig.pipelineID]) {
-            processUnprocessedMessages(pipelineConfig.pipelineID, processMessageReduce)
+            processUnprocessedMessages(pipelineConfig, processMessageReduce)
          }
 
       },
    });
 }
 
-function processUnprocessedMessages(pipelineID: string, callback: (key: string, val: MessageValue, pipelineConfig: PipelineConfig) => any) {
-   if (!unprocessedMessages[pipelineID]) return;
+function processUnprocessedMessages(pipelineConfig: PipelineConfig, callback: (message: KafkaMessage, pipelineConfig: PipelineConfig) => any) {
+   const pipelineID = pipelineConfig.pipelineID;
    console.log(`[MAP MODE] Processing unprocessed messages for pipeline: ${pipelineID} | ${unprocessedMessages[pipelineID]?.length}`);
    // TODO make this async?
-   unprocessedMessages[pipelineID].forEach( (msg:{key: string, val: MessageValue, timestamp: any}) => {
+   while (unprocessedMessages[pipelineID].length > 0) {
+      const msg = unprocessedMessages[pipelineID].shift(); // consume the first item
+      if (!msg) { // TODO should not happen... right? 
+         console.log(`[ERROR] No message found in unprocessedMessages`);
+         return;
+      } 
       console.log(`[MAP MODE] Processing unprocessed message: ${msg.timestamp}`);
-       callback(msg.key, msg.val, pipelines[pipelineID]);
-   });
+      callback(msg, pipelines[pipelineID]);
+   }
 }
 
-let unprocessedMessages: { [pipelineID: string]: any[] } = {}; // Queue for messages with missing pipelineConfig
+let unprocessedMessages: { [pipelineID: string]: KafkaMessage[] } = {}; // Queue for messages with missing pipelineConfig
 
-function enqueueUnprocessedMessage (pipelineID: string, val: MessageValue, key: string, timestamp: any = null) {
+function enqueueUnprocessedMessage (message: KafkaMessage, pipelineID: string) {
    // TODO pause consumer if no pipeline available
-   console.log(`[ERROR] No pipeline found for ID: ${pipelineID}. Pausing consumer...`);
+   console.log(`[${WORKER_ID}][ERROR] No pipeline found for ID: ${pipelineID}. Delaying message processing`);
    // Add entry to unprocessedMessages queue if missing
    if (!unprocessedMessages[pipelineID]) {
       unprocessedMessages[pipelineID] = [];
    }
 
    // Add message to queue
-   unprocessedMessages[pipelineID].push({key, val, timestamp});
+   unprocessedMessages[pipelineID].push(message);
    // TODO check ordering of push+foreach
 
    return; // Skip processing this message for now
 }
+
+
+function getPipelineID(input: string): string | null {
+   // const splitPattern = new RegExp(`__(source-record__\\d+|${STREAM_ENDED_KEY})$`);
+   // Regular expression to match either 
+   // - '__source-record__1325' or 
+   // - '__STREAM_ENDED_KEY'
+   // - '__shuffle-record__key'
+   // with key being any string that does not contain a double underscore __
+   const splitPattern = new RegExp(
+      `__(source-record__\\d+|${STREAM_ENDED_KEY}|shuffle-record__[^_]+(?:_[^_]+)*)$`
+  );
+   // Split the input string using the regular expression
+   const parts = input.split(splitPattern);
+
+   // the expected content parts is: [pipelineID, delimiter, ""]
+   // Note the empty string at the end
+   // The pipelineID is the first part if the split was successful
+   return parts.length === 3 ? parts[0] : null;
+}
+
 
 // Map mode: Applies the map function to incoming messages
 async function mapMode() {
@@ -114,31 +143,24 @@ async function mapMode() {
       // partitionsConsumedConcurrently: 3, // Default: 1
       eachMessage: async ({ message }: { message: KafkaMessage }) => {
          console.log(`[${MODE}/${WORKER_ID}] reading 00 ${message.value?.toString()}`)
-         if (!message.value) {
-            console.log(`[MAP MODE] No message value found. Skipping...`);
-            return;
-         }
-         const { key, val } = unboxKafkaMessage(message);
-         const pipelineConfig = pipelines[val.pipelineID];
-         
-         if (isStreamEnded(message)) {
-            console.log(`[MAP MODE] Received stream ended message. Processing cached messages...`);
-            processUnprocessedMessages(val.pipelineID, processMessageMap);
-            
-            console.log(`[MAP MODE] Propagating stream ended message to shuffle...`);
-            // Send to shuffle consumer special value to start feeding the reduce
-            await producer.send({
-               topic: SHUFFLE_TOPIC,
-               messages: [{ key: STREAM_ENDED_KEY, value: JSON.stringify(newStreamEndedMessage(val.pipelineID)), }],
-            });
+         if (!message.value || !message.key) {
+            console.log(`[MAP MODE] No message value or key found. Skipping...`);
             return;
          }
 
+         const pipelineID = getPipelineID(message.key.toString());
+         if (!pipelineID) return; // Throw error?
+         const pipelineConfig = pipelines[pipelineID];
          
+         
+         // TODO need to handle stream_ended_key
          // TODO pause consumer if no pipeline available
-         if (!pipelineConfig) enqueueUnprocessedMessage(val.pipelineID,val,key,message.timestamp);
+         if (!pipelineConfig) {
+            enqueueUnprocessedMessage(message, pipelineID);
+            return;
+         }
          
-         await processMessageMap(key,val, pipelineConfig);
+         await processMessageMap(message, pipelineConfig);
       },
    });
 }
@@ -146,17 +168,27 @@ async function mapMode() {
 /**
  * to be invoked on a message value ready to be processed in map mode
  * We enforce this by explicitly passing the pipelineConfig.
- * @param key is present only to match the signature of processMessageReduce
- * @param messageValue message.value
  * @param pipelineConfig this is here only to enforce that the pipelineConfig is passed in and should be available when processing
  */
-async function processMessageMap(key:string, val: MessageValue, pipelineConfig: PipelineConfig) {
-   // check if isStreamEndedMessage should not be necessary here...
+async function processMessageMap(message: KafkaMessage, pipelineConfig: PipelineConfig) {
+   const { key, val } = unboxKafkaMessage(message);
+   if (isStreamEnded(message)) {
+      console.log(`[MAP MODE] Received stream ended message. `);
+
+      console.log(`[MAP MODE] Propagating stream ended message to shuffle...`);
+      // Send to shuffle consumer special value to start feeding the reduce
+      await producer.send({
+         topic: SHUFFLE_TOPIC,
+         messages: [{ key: `${pipelineConfig.pipelineID}__${STREAM_ENDED_KEY}`, value: JSON.stringify(newStreamEndedMessage(val.pipelineID)), }],
+      });
+      return;
+   }
+
    const mapResults = pipelineConfig.mapFn(val.data);
    for (const result of mapResults) {
       await producer.send({
          topic: SHUFFLE_TOPIC,
-         messages: [{ key: pipelineConfig.keySelector(result), value: JSON.stringify(newMessageValue(result,pipelineConfig.pipelineID)) }],
+         messages: [{ key: pipelineConfig.keySelector(result), value: JSON.stringify(newMessageValue(result, pipelineConfig.pipelineID)) }],
       });
    }
    console.log(`[MAP MODE] Processed: ${val.data}`);
@@ -196,7 +228,7 @@ async function shuffleMode() {
                const tmp = JSON.stringify(newMessageValueShuffled(keyValueStore[pipelineID][key],pipelineID));
                await producer.send({
                   topic: REDUCE_TOPIC,
-                  messages: [{ "key": key, "value": tmp }],
+                  messages: [{ "key": `${pipelineID}__shuffle-record__${key}`, "value": tmp }],
                });
                console.log(tmp);
                console.log(`[SHUFFLE MODE] Sending: ${key} -> ${tmp}`);
@@ -223,35 +255,46 @@ async function reduceMode() {
 
    consumer.run({
       eachMessage: async ({ message }: { message: KafkaMessage }) => {
-         console.log(`[${MODE}/${WORKER_ID}]`)
          if (!message.key || !message.value) return;
+         console.log(`[${MODE}/${WORKER_ID}] -> ${(message.key.toString())}`)
 
 
-         const {key,val} = unboxKafkaMessage(message);
-         const pipelineConfig = pipelines[val.pipelineID];
+         const pipelineID = getPipelineID(message.key.toString());
+         console.log("reduce 00");
 
-
+         if (!pipelineID) return; // Throw error?
+         const pipelineConfig = pipelines[pipelineID];
+         console.log("reduce 10");
          // At this point we are almost sure that the pipelineConfig is available, 
          // otherwise the message would not have been processed in map, there must have
          // been a huge delay or some other issue related to the pipeline update message 
          if (!pipelineConfig) {
-            console.log(`[ERROR] No pipeline found for ID: ${val.pipelineID}`);
-            // TODO delay execution and retry
-            enqueueUnprocessedMessage(val.pipelineID, val,key, message.timestamp);
+         console.log("reduce 20");
+         enqueueUnprocessedMessage(message, pipelineID);
             return;
          }
-         processMessageReduce(key, val, pipelineConfig);
+         console.log("reduce 30");
+         processMessageReduce(message, pipelineConfig);
       },
    });
 }
 
-async function processMessageReduce(key: string, val: MessageValue,  pipelineConfig: PipelineConfig) {
-   const reducedResult = pipelineConfig.reduceFn(key, val.data);
-   console.log(`[REDUCE MODE] Reduced: ${key} -> ${reducedResult}`);
+async function processMessageReduce(message: KafkaMessage,  pipelineConfig: PipelineConfig) {
+   const { key, val } = unboxKafkaMessage(message);
+
+   if (key.toString().split('__').length !== 3) {
+      return;
+      // TODO throw error?
+   }
+   // Trim to get from the second __ till the end, i.e. the word
+   // TODO ensure safety
+   const word = key.split('__')[2];
+   const reducedResult = pipelineConfig.reduceFn(word, val.data);
+   console.log(`[REDUCE MODE] Reduced: ${word} -> ${reducedResult}`);
 
    await producer.send({
       topic: OUTPUT_TOPIC,
-      messages: [{ "key": key, value: JSON.stringify(newMessageValue(reducedResult,val.pipelineID)) }],
+      messages: [{ "key": word, value: JSON.stringify(newMessageValue(reducedResult,val.pipelineID)) }],
    });
 }
 
@@ -260,7 +303,7 @@ async function main() {
       await listenForPipelineUpdates();
       await mapMode();
    } else if (MODE === '--shuffle') {
-      // TODO perhaps this may be avoided for shuffle
+      // This ain't necessary for shuffle
       // await listenForPipelineUpdates();
       await shuffleMode();
    } else if (MODE === '--reduce') {
