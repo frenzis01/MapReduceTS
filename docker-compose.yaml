@@ -32,6 +32,13 @@ services:
       timeout: 5s
       retries: 5
 
+  redis:
+    image: redis:8.0-M02-alpine
+    attach: false
+    container_name: redis
+    ports:
+      - "6379:6379"
+
   source:
     build:
       context: ./source
@@ -41,7 +48,7 @@ services:
       GROUP_ID: source-group
     volumes:
       - ./input:/usr/src/app/input
-    command: ["sh", "-c", "sleep 2 && node dist/index.js --source"]
+    command: ["sh", "-c", "sleep 1 && node dist/index.js --source"]
     depends_on:
       kafka:
         condition: service_healthy
@@ -50,10 +57,14 @@ services:
     build:
       context: ./worker
       dockerfile: Dockerfile
-    container_name: mapper
+    # container_name: mapper
     environment:
       GROUP_ID: map-group
-    command: ["sh", "-c", "sleep 1 && node dist/index.js --map"]
+      # N_MAPPERS: ${N_MAPPERS} 
+    command: ["sh", "-c", "sleep 2 && node dist/index.js --map"]
+    deploy:
+      mode: replicated
+      replicas: 3
     depends_on:
       kafka:
         condition: service_healthy
@@ -62,10 +73,14 @@ services:
     build:
       context: ./worker
       dockerfile: Dockerfile
-    container_name: shuffler
+    # container_name: shuffler
     environment:
       GROUP_ID: shuffle-group
-    command: ["sh", "-c", "sleep 1 && node dist/index.js --shuffle"]
+      # # N_MAPPERS: ${N_MAPPERS}
+    command: ["sh", "-c", "sleep 2 && node dist/index.js --shuffle"]
+    deploy:
+      mode: replicated
+      replicas: 2
     depends_on:
       kafka:
         condition: service_healthy
@@ -77,7 +92,7 @@ services:
     container_name: reducer
     environment:
       GROUP_ID: reduce-group
-    command: ["sh", "-c", "sleep 1 && node dist/index.js --reduce"]
+    command: ["sh", "-c", "sleep 2 && node dist/index.js --reduce"]
     depends_on:
       kafka:
         condition: service_healthy
@@ -91,7 +106,7 @@ services:
       GROUP_ID: sink-group
     volumes:
       - ./output:/usr/src/app/output
-    command: ["sh", "-c", "sleep 1 && node dist/index.js --output"]
+    command: ["sh", "-c", "sleep 2 && node dist/index.js --output"]
     depends_on:
       kafka:
         condition: service_healthy

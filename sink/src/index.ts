@@ -49,7 +49,7 @@ async function outputMode() {
             // Prepend the worker ID to allow multiple sinks to work simultaneously without operating on the same file
             const outputPath = path.join(OUTPUT_FOLDER, `${WORKER_ID}_${value.pipelineID}_result.txt`);
             fs.appendFileSync(outputPath, `${key}: ${value.data}\n`);
-            console.log(`[SINK MODE] Wrote result: ${key}: ${value.data}`);
+            console.log(`[SINK MODE] Wrote result: ${value.pipelineID}/${key}: ${value.data}`);
          }
       },
    });

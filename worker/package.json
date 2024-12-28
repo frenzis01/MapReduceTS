@@ -9,7 +9,8 @@
    },
    "dependencies": {
      "fs": "^0.0.1-security",
-     "kafkajs": "^2.2.4"
+     "kafkajs": "^2.2.4",
+     "redis" : "^4.0.0"
    },
    "devDependencies": {
      "@types/fs-extra": "^9.0.13",

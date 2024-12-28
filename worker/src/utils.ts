@@ -37,11 +37,12 @@ function unboxKafkaMessage(msg: KafkaMessage) {
    return { key, val }
 }
 
-function newStreamEndedMessage(pipelineID: string): MessageValue {
+// TODO numberOfMessages is used only by source... which does not exploit this file...
+function newStreamEndedMessage(pipelineID: string, numberOfMessages: any = STREAM_ENDED_VALUE): MessageValue {
    return {
       pipelineID: pipelineID,
       type: MessageType.STREAM_ENDED,
-      data: STREAM_ENDED_VALUE
+      data: numberOfMessages
    };
 }
 
@@ -53,14 +54,9 @@ function isStreamEndedKey(str: string): boolean {
 
 function isStreamEnded(message: KafkaMessage): boolean {
    try {
-      // TODO Why is toString() NOT necessary?
-      // const value = message.value === STREAM_ENDED_VALUE ? message.value : JSON.parse(message.value.toString());
-      let value;
-      if (message.value)
-         value = JSON.parse(message.value.toString());
-      if (!value || !message.key) return false;
-      const tmp = (message.key && isStreamEndedKey(message.key.toString())) && value.type === MessageType.STREAM_ENDED && value.data === STREAM_ENDED_VALUE;
-      if (tmp) console.log(`[STREAM_ENDED] Stream ${value.pipelineID}`);
+      if (!message.key) return false;
+      const tmp = isStreamEndedKey(message.key.toString());
+      if (tmp) console.log(`[STREAM_ENDED] Stream ${message.key.toString().split('__')[0]} ended`);
       return tmp;
    } catch (error) {
       return false;
@@ -105,6 +101,23 @@ function stringifyPipeline(pipeline: PipelineConfig): string {
    return JSON.stringify(tmp);
 }
 
+/**
+ * 
+ * @param s 
+ * @returns bitwise hash of the string
+ */
+function bitwiseHash(s: string) {
+   let hash = 0;
+
+   if (s.length === 0) return hash;
+
+   for (const char of s) {
+       hash ^= char.charCodeAt(0); // Bitwise XOR operation
+   }
+
+   return hash;
+}
+
 export {
    MessageType,
    MessageValue,
@@ -115,5 +128,6 @@ export {
    newMessageValueShuffled,
    PipelineConfig,
    stringifyPipeline,
+   bitwiseHash,
    STREAM_ENDED_KEY
 }

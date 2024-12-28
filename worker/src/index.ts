@@ -3,13 +3,18 @@
  * Since we will run everything in Docker, so no problem with the installed modules.
  *  */
 // @ts-ignore
-import { Kafka, logLevel, KafkaMessage } from 'kafkajs';
+import { Kafka, logLevel, KafkaMessage, KafkaPartition } from 'kafkajs';
+// TODO does KafkaMessage really work?
+
+// @ts-ignore
+import { createClient } from 'redis';
 
 // @ts-ignore
 const MODE = process.argv[2];
 // @ts-ignore
 const GROUP_ID = process.env.GROUP_ID || 'default-group';
-
+// @ts-ignore
+const N_MAPPERS = process.env.N_MAPPERS || 1;
 import {
    MessageType,
    MessageValue,
@@ -20,6 +25,7 @@ import {
    newMessageValueShuffled,
    PipelineConfig,
    stringifyPipeline,
+   bitwiseHash,
    STREAM_ENDED_KEY
 } from './utils';
 
@@ -31,12 +37,18 @@ const kafka = new Kafka({
 const producer = kafka.producer();
 const consumer = kafka.consumer({ groupId: GROUP_ID || 'default-group' });
 
+const redis = createClient({
+   url: 'redis://redis:6379' // Redis URL matches the service name in docker-compose
+})
 
 const PIPELINE_UPDATE_TOPIC = 'pipeline-updates';
 const MAP_TOPIC = 'map-topic';
 const SHUFFLE_TOPIC = 'shuffle-topic';
 const REDUCE_TOPIC = 'reduce-topic';
 const OUTPUT_TOPIC = 'output-topic';
+
+// TODO remove and use dispatcher
+const BUCKET_SIZE = 10;
 
 // Unique worker ID
 const WORKER_ID = `worker-${Math.random().toString(36).substring(2, 15)}`;
@@ -138,7 +150,13 @@ async function mapMode() {
 
    await producer.connect();
 
+   const admin = await kafka.admin();
+   await admin.connect();
+
+   // We need redis to write to shared counter to synchronize on shuffling
+   await redis.connect();
    consumer.run({
+
       // TODO
       // partitionsConsumedConcurrently: 3, // Default: 1
       eachMessage: async ({ message }: { message: KafkaMessage }) => {
@@ -161,6 +179,7 @@ async function mapMode() {
          }
 
          await processMessageMap(message, pipelineConfig);
+
       },
    });
 }
@@ -172,26 +191,71 @@ async function mapMode() {
  */
 async function processMessageMap(message: KafkaMessage, pipelineConfig: PipelineConfig) {
    const { key, val } = unboxKafkaMessage(message);
+   // We don't have to wait to propagate it as in shuffle.
+   // We can propagate it immediately, and leave the synchronization to the shuffle container
    if (isStreamEnded(message)) {
-      console.log(`[MAP MODE] Received stream ended message. `);
 
-      console.log(`[MAP MODE] Propagating stream ended message to shuffle...`);
-      // Send to shuffle consumer special value to start feeding the reduce
-      await producer.send({
-         topic: SHUFFLE_TOPIC,
-         messages: [{ key: `${pipelineConfig.pipelineID}__${STREAM_ENDED_KEY}`, value: JSON.stringify(newStreamEndedMessage(val.pipelineID)), }],
-      });
-      return;
+      await redis.incr(`${pipelineConfig.pipelineID}-MAP-ENDED-counter`);
+      // TODO
+      /**
+       * Alternative:
+       * - Fissare bucket size comune a tutti hardcoded, e controllare se ended-counter < BUCKET_SIZE
+       * shuffler allora aspetta BUCKET_SIZE messaggi STREAM_ENDED prima di procedere.
+       *  - Aggiungere un dispatcher, che ridistribuisca i messaggi della source su varie partizioni e informa i worker del valore di BUCKET_SIZE.
+       */
+
+      const counter = await redis.get(`${pipelineConfig.pipelineID}-MAP-ENDED-counter`);
+      if (!counter || Number(counter) !== BUCKET_SIZE) {
+         console.log(`[MAP MODE] Received stream ended message. Got ${counter}/${BUCKET_SIZE} messages...`);
+         return;
+      }
+      else {
+         console.log(`[MAP MODE] Received last STREAM_ENDED message. `);
+
+         // Send to shuffle consumer special value to start feeding the reduce
+         // Send on all partitions
+         for (let i = 0; i < BUCKET_SIZE; i++) {
+            // console.log(`[MAP MODE] Sending stream ended message to partition ${i}...`);
+            await producer.send({
+               topic: SHUFFLE_TOPIC,
+               // TODO verify if val.data holds the numberOfMessages to be processed
+               messages: [{
+                  key: `${pipelineConfig.pipelineID}__${STREAM_ENDED_KEY}`,
+                  value: JSON.stringify(newStreamEndedMessage(val.pipelineID, val.data)),
+                  partition: i,
+               }],
+            });
+         }
+         console.log(`[MAP MODE] Propagated stream ended message to shuffle...`);
+         return;
+      }
    }
 
    const mapResults = pipelineConfig.mapFn(val.data);
    for (const result of mapResults) {
+      const hashed = bitwiseHash(pipelineConfig.keySelector(result)) % BUCKET_SIZE;
       await producer.send({
          topic: SHUFFLE_TOPIC,
+         // items with the same key should go to the same partition, i.e. the same shuffler
+         // consider flattening the keys to avoid too many partitions
+         // TODO hash the key and use the hash and modulo BUCKET_SIZE to get partition
          messages: [{ key: pipelineConfig.keySelector(result), value: JSON.stringify(newMessageValue(result, pipelineConfig.pipelineID)) }],
       });
    }
-   console.log(`[MAP MODE] Processed: ${val.data}`);
+}
+
+
+async function printTopicMetadata(admin: any, producer: any, topic: string, pipelineID: string) {
+
+   const topicsMetadata = await admin.fetchTopicMetadata({ "topics": [topic] });
+   console.log("[METADATA] printing topics metadata");
+
+   const topics = await admin.listTopics();
+   console.log(JSON.stringify(topics));
+   await producer.send({
+      topic: OUTPUT_TOPIC,
+      messages: [{ key: "TOPIC_METADATA", value: JSON.stringify(newMessageValue(JSON.stringify(topicsMetadata), pipelineID)) }]
+   })
 }
 
 
@@ -205,35 +269,83 @@ async function shuffleMode() {
    await consumer.subscribe({ topic: SHUFFLE_TOPIC, fromBeginning: true });
 
    await producer.connect();
+
    // For each pipelineID, we store the key-value pairs
    const keyValueStore: { [pipelineID: string]: { [key: string]: string[] } } = {};
 
-   consumer.run({
-      eachMessage: async ({ message }: { message: KafkaMessage }) => {
-         console.log(`[${MODE}/${WORKER_ID}] -> ${!message.key || !message.value} | ${message.key?.toString()} ${message.value?.toString()}`)
+   // We need redis to read the number of processed messages
+   await redis.connect();
 
+   let counter = 0;
+
+
+   consumer.run({
+      eachMessage: async ({ partition, message }: { partition: any, message: KafkaMessage }) => {
+         console.log(`[${MODE}/${WORKER_ID}] -> ${!message.key || !message.value} | ${message.key?.toString()} ${message.value?.toString()}`)
          if (!message.key || !message.value) return;
+
+         counter++;
 
          const { key, val } = unboxKafkaMessage(message);
          const pipelineID = val.pipelineID;
+
+         if (!pipelineID) return; // Throw error?
+
          // IF not received this pipelineID before, add it 
          if (!keyValueStore[pipelineID]) {
             keyValueStore[pipelineID] = {};
          }
 
          if (isStreamEnded(message)) {
-            // Send stored values to reduce
-            for (const key of Object.keys(keyValueStore[pipelineID])) {
-               // Remove tmp
-               const tmp = JSON.stringify(newMessageValueShuffled(keyValueStore[pipelineID][key], pipelineID));
-               await producer.send({
-                  topic: REDUCE_TOPIC,
-                  messages: [{ "key": `${pipelineID}__shuffle-record__${key}`, "value": tmp }],
-               });
-               console.log(tmp);
-               console.log(`[SHUFFLE MODE] Sending: ${key} -> ${tmp}`);
+
+            console.log(`[SHUFFLE MODE] Received stream ended message for pipeline: ${pipelineID}`);
+            // TODO improve the logic of these ifs
+            if (!await redis.get(`${pipelineID}-SHUFFLE-READY-flag`)) {
+               await redis.incr(`${pipelineID}-SHUFFLE-ENDED-counter`);
+               const streamEndedCounter = await redis.get(`${pipelineID}-SHUFFLE-ENDED-counter`);
+               console.log(`[SHUFFLE MODE] Got ${streamEndedCounter} STREAM_ENDED messages...`);
             }
-            return;
+            // // TODO get bucket size from dispatcher?
+            const streamEndedCounter = await redis.get(`${pipelineID}-SHUFFLE-ENDED-counter`);
+            if (!streamEndedCounter || Number(streamEndedCounter) < BUCKET_SIZE) {
+               return;
+            }
+            // if reached the number of STREAM_ENDED messages, wake everyone with a stream Ended message 
+            // having a flag set to make them recognize it as a dummy message
+            if (!(await redis.get(`${pipelineID}-SHUFFLE-READY-flag`))) {
+               await redis.set(`${pipelineID}-SHUFFLE-READY-flag`, `true`);
+               for (let i = 0; i < BUCKET_SIZE; i++) {
+                  await producer.send({
+                     topic: SHUFFLE_TOPIC,
+                     messages: [{
+                        key: `${pipelineID}__${STREAM_ENDED_KEY}`,
+                        value: JSON.stringify(newStreamEndedMessage(val.pipelineID, val.data)),
+                        partition: i
+                     }],
+                  });
+               }
+            }
+
+            // Avoid else if so that we send stuff after setting the flag
+            if (await redis.get(`${pipelineID}-SHUFFLE-READY-flag`)) {
+
+
+               console.log(`[SHUFFLE MODE] [STREAM_ENDED] Sending ${Object.keys(keyValueStore[pipelineID]).length} keys to reduce... from ${counter} messages`);
+
+
+               await Promise.all(Object.keys(keyValueStore[pipelineID]).map(async (key) => {
+                  // Remove tmp
+                  const tmp = JSON.stringify(newMessageValueShuffled(keyValueStore[pipelineID][key], pipelineID));
+                  await producer.send({
+                     topic: REDUCE_TOPIC,
+                     messages: [{ "key": `${pipelineID}__shuffle-record__${key}`, "value": tmp }],
+                  });
+                  console.log(tmp);
+                  console.log(`[SHUFFLE MODE] Sending: ${key} -> ${tmp}`);
+                  // Remove the key from keyValueStore
+                  delete keyValueStore[pipelineID][key];
+               }));
+            }
          }
          if (!keyValueStore[pipelineID][key]) {
             keyValueStore[pipelineID][key] = [];
@@ -242,7 +354,7 @@ async function shuffleMode() {
 
          console.log(`[SHUFFLE MODE] Received: ${key} -> ${JSON.stringify(val.data)}`);
 
-      },
+      }
    });
 }
 
@@ -260,20 +372,16 @@ async function reduceMode() {
 
 
          const pipelineID = getPipelineID(message.key.toString());
-         console.log("reduce 00");
 
          if (!pipelineID) return; // Throw error?
          const pipelineConfig = pipelines[pipelineID];
-         console.log("reduce 10");
          // At this point we are almost sure that the pipelineConfig is available, 
          // otherwise the message would not have been processed in map, there must have
          // been a huge delay or some other issue related to the pipeline update message 
          if (!pipelineConfig) {
-            console.log("reduce 20");
             enqueueUnprocessedMessage(message, pipelineID);
             return;
          }
-         console.log("reduce 30");
          processMessageReduce(message, pipelineConfig);
       },
    });
@@ -299,6 +407,9 @@ async function processMessageReduce(message: KafkaMessage, pipelineConfig: Pipel
 }
 
 async function main() {
+   // We need redis for some shared state to synchronize on shuffling
+   redis.on('error', (err: any) => console.error('Redis Client Error', err));
+
    if (MODE === '--map') {
       await listenForPipelineUpdates();
       await mapMode();
@@ -314,6 +425,7 @@ async function main() {
    }
 }
 
+// TODO implement disconnect policy
 main().catch((error) => {
    console.error(`[ERROR] ${error.message}`);
    // If error is that kafka does not host the topic, wait and retry
