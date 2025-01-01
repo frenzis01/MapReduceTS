@@ -1,5 +1,3 @@
-// TODO clean this file from useless functions
-
 enum MessageType {
    STREAM_ENDED = 'STREAM_ENDED',
    STREAM_DATA = 'STREAM_DATA',
@@ -11,7 +9,6 @@ const STREAM_ENDED_VALUE = null;
 
 // @ts-ignore
 import { KafkaMessage } from 'kafkajs';
-
 
 // Define unified messages value field format
 interface MessageValue {
@@ -38,7 +35,7 @@ function unboxKafkaMessage(msg: KafkaMessage) {
    return { key, val }
 }
 
-
+// TODO numberOfMessages is used only by source... which does not exploit this file...
 function newStreamEndedMessage(pipelineID: string, numberOfMessages: any = STREAM_ENDED_VALUE): MessageValue {
    return {
       pipelineID: pipelineID,
@@ -102,6 +99,23 @@ function stringifyPipeline(pipeline: PipelineConfig): string {
    return JSON.stringify(tmp);
 }
 
+/**
+ * 
+ * @param s 
+ * @returns bitwise hash of the string
+ */
+function bitwiseHash(s: string) {
+   let hash = 0;
+
+   if (s.length === 0) return hash;
+
+   for (const char of s) {
+       hash ^= char.charCodeAt(0); // Bitwise XOR operation
+   }
+
+   return hash;
+}
+
 export {
    MessageType,
    MessageValue,
@@ -112,5 +126,6 @@ export {
    newMessageValueShuffled,
    PipelineConfig,
    stringifyPipeline,
+   bitwiseHash,
    STREAM_ENDED_KEY
 }

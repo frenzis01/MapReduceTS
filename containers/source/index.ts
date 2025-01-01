@@ -23,7 +23,8 @@ import {
    PipelineConfig,
    stringifyPipeline,
    STREAM_ENDED_KEY
-} from './utils';
+// @ts-ignore
+} from "./utils";
 // TODO ugly import
 
 const kafka = new Kafka({

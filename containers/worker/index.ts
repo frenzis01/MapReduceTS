@@ -27,7 +27,8 @@ import {
    stringifyPipeline,
    bitwiseHash,
    STREAM_ENDED_KEY
-} from './utils';
+// @ts-ignore
+} from "./utils";
 
 const kafka = new Kafka({
    clientId: 'mapreduce',
@@ -326,7 +327,7 @@ async function shuffleMode() {
                }
             }
 
-            // Avoid else if so that we send stuff after setting the flag
+            // Avoid 'else' so that we send stuff after setting the flag
             if (await redis.get(`${pipelineID}-SHUFFLE-READY-flag`)) {
 
 
@@ -346,6 +347,7 @@ async function shuffleMode() {
                   delete keyValueStore[pipelineID][key];
                }));
             }
+            return;
          }
          if (!keyValueStore[pipelineID][key]) {
             keyValueStore[pipelineID][key] = [];

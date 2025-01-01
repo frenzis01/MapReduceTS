@@ -1,4 +1,4 @@
-# version: '3.9'
+version: '3.9'
 
 services:
   zookeeper:
@@ -26,8 +26,6 @@ services:
       - ./kafka_healthcheck.sh:/kafka_healthcheck.sh
     healthcheck:
       test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server", "localhost:9092"]
-      # test: ["CMD-SHELL", "echo 'test-message' | kafka-console-producer.sh --broker-list localhost:9092 --topic health-check-topic && kafka-console-consumer.sh --bootstrap-server localhost:9092 --topic health-check-topic --from-beginning --max-messages 1 | grep 'test-message'"]
-      # test: ["CMD-SHELL", "sh /kafka_healthcheck.sh"]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -41,8 +39,10 @@ services:
 
   source:
     build:
-      context: ./source
-      dockerfile: Dockerfile
+      context: ./containers
+      dockerfile: common/Dockerfile
+      args:
+        CONTAINER_NAME: source
     container_name: source
     environment:
       GROUP_ID: source-group
@@ -55,12 +55,12 @@ services:
 
   mapper:
     build:
-      context: ./worker
-      dockerfile: Dockerfile
-    # container_name: mapper
+      context: ./containers
+      dockerfile: common/Dockerfile
+      args:
+        CONTAINER_NAME: worker
     environment:
       GROUP_ID: map-group
-      # N_MAPPERS: ${N_MAPPERS} 
     command: ["sh", "-c", "sleep 2 && node dist/index.js --map"]
     deploy:
       mode: replicated
@@ -71,12 +71,12 @@ services:
 
   shuffler:
     build:
-      context: ./worker
-      dockerfile: Dockerfile
-    # container_name: shuffler
+      context: ./containers
+      dockerfile: common/Dockerfile
+      args:
+        CONTAINER_NAME: worker
     environment:
       GROUP_ID: shuffle-group
-      # # N_MAPPERS: ${N_MAPPERS}
     command: ["sh", "-c", "sleep 2 && node dist/index.js --shuffle"]
     deploy:
       mode: replicated
@@ -87,8 +87,10 @@ services:
 
   reducer:
     build:
-      context: ./worker
-      dockerfile: Dockerfile
+      context: ./containers
+      dockerfile: common/Dockerfile
+      args:
+        CONTAINER_NAME: worker
     container_name: reducer
     environment:
       GROUP_ID: reduce-group
@@ -99,8 +101,10 @@ services:
 
   sink:
     build:
-      context: ./sink
-      dockerfile: Dockerfile
+      context: ./containers
+      dockerfile: common/Dockerfile
+      args:
+        CONTAINER_NAME: sink
     container_name: sink
     environment:
       GROUP_ID: sink-group
