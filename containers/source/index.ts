@@ -7,23 +7,22 @@ import fs from 'fs';
 // @ts-ignore
 import path from 'path';
 // @ts-ignore
-import { Kafka, logLevel, KafkaMessage, Partitioners } from 'kafkajs';
+import { Kafka, logLevel} from 'kafkajs';
 
 // @ts-ignore
 const MODE = process.argv[2];
 
 import {
-   MessageType,
-   MessageValue,
-   unboxKafkaMessage,
    newStreamEndedMessage,
-   isStreamEnded,
    newMessageValue,
    newMessageValueShuffled,
    PipelineConfig,
    stringifyPipeline,
-   STREAM_ENDED_KEY
-// @ts-ignore
+   STREAM_ENDED_KEY,
+   DISPATCHER_TOPIC,
+   PIPELINE_UPDATE_TOPIC,
+   OUTPUT_TOPIC,
+   // @ts-ignore
 } from "./utils";
 // TODO ugly import
 
@@ -34,33 +33,10 @@ const kafka = new Kafka({
 });
 const producer = kafka.producer();
 
-const admin = kafka.admin();
-const createTopic = async () => {
-   await admin.connect();
-   await admin.createTopics({
-      topics: [{
-         topic: 'map-topic',
-         numPartitions: BUCKET_SIZE, // Specify the number of partitions
-         replicationFactor: 1
-      },
-      {
-         topic: 'shuffle-topic',
-         numPartitions: BUCKET_SIZE, // Specify the number of partitions
-         replicationFactor: 1
-      }
-      ]
-   });
-   await admin.disconnect();
-};
-
 
 const INPUT_FOLDER = './input';
 
-const PIPELINE_UPDATE_TOPIC = 'pipeline-updates';
-const MAP_TOPIC = 'map-topic';
-
-const BUCKET_SIZE = 10;
-
+// Pipeline implementing the typical word-count example
 const pipelineWordCount: PipelineConfig = {
    pipelineID: 'word-count',
    keySelector: (message: any) => message.word,
@@ -77,12 +53,11 @@ const pipelineWordCount: PipelineConfig = {
 
 // Source mode: Reads files from a folder and sends messages to Kafka
 async function sourceMode() {
-   await createTopic().catch(console.error);
 
-   // await new Promise(f => setTimeout(f, 1000));
    console.log('[SOURCE MODE] Monitoring input folder...');
    await producer.connect();
-   console.log('[SOURCE MODE] Connected to producer...');
+   console.log('[SOURCE MODE] Producer connected to Kafka...');
+
 
    const pipelinesProducer = kafka.producer();
    await pipelinesProducer.connect();
@@ -96,6 +71,7 @@ async function sourceMode() {
    });
    console.log(`[SOURCE MODE] Sent pipelineID: ${JSON.stringify(pipelineWordCount.pipelineID)}`);
 
+   // function invoked for each file insise input folder
    const processFile = async (filePath: string) => {
       console.log(`[SOURCE MODE] Processing file: ${filePath}/${fs.existsSync(filePath)}`);
       if (fs.existsSync(filePath)) {
@@ -109,20 +85,21 @@ async function sourceMode() {
          data.forEach((record: any, index: number) => {
             console.log(`[SOURCE MODE] type of record : ${typeof record} ${index}`);
             producer.send({
-               topic: MAP_TOPIC,
+               topic: DISPATCHER_TOPIC,
                // We add an index to the key as a reference for partitioning
                // we specify the partition to send the message to
                // note that this is an upper bound on the parallelism degree.
                messages: [{
-                  key: pipelineID + "__source-record__" + index % BUCKET_SIZE,
+                  key: pipelineID + "__source-record__" + index,
                   value: JSON.stringify(newMessageValue(record, pipelineID)),
-                  partition: (index) % 3
+                  // partition: (index) % 3
                }],
             });
             console.log(`[SOURCE MODE] Sent record: ${JSON.stringify(record)}`);
+
             // Compute locally and sequentially
             const results = pipelineWordCount.mapFn(record);
-            results.forEach((v) => {
+            results.forEach((v: string) => {
                const key = pipelineWordCount.keySelector(v);
                if (!shuffled[key]) {
                   shuffled[key] = [];
@@ -130,41 +107,39 @@ async function sourceMode() {
                shuffled[key].push(v);
 
             });
-            if (index % 10 === 0) {
-            }
          });
 
+
+         /**
+          * Reduce locally and sequentially
+          * This helps to get a reference to check if the final parallelized result is correct
+          */
          const reduced = Object.keys(shuffled).map((key) => {
-            console.log(`[SOURCE MODE] Reducing: ${key}`);
+            console.log(`[SOURCE MODE/seq] Reducing: ${key}`);
             return [key, pipelineWordCount.reduceFn(key, shuffled[key])];
          });
 
          reduced.forEach(async ([key, value]) => {
-            console.log(`[SOURCE MODE] Sending reduced: ${key}: ${value}`);
+            console.log(`[SOURCE MODE/seq] Sending reduced: ${key}: ${value}`);
             await producer.send({
-               topic: 'output-topic',
+               topic: OUTPUT_TOPIC,
                messages: [{
                   key: key,
                   value: JSON.stringify(newMessageValueShuffled(value, "seq-word-count")),
                }],
             });
-            console.log(`[SOURCE MODE] Sent reduced: ${key}: ${value}`);
          });
 
 
          // Send to shuffle consumer special value to start feeding the reduce
-         console.log(`[SOURCE MODE] Sending stream ended message to MAP...`);
-         // send on all partitions
-         for (let i = 0; i < BUCKET_SIZE; i++) {
-            await producer.send({
-               topic: MAP_TOPIC,
-               messages: [{
-                  key: `${pipelineID}__${STREAM_ENDED_KEY}`,
-                  value: JSON.stringify(newStreamEndedMessage(pipelineID, data.length)),
-                  partition: i
-               }],
-            });
-         }
+         console.log(`[SOURCE MODE] Sending stream ended message to DISPATCHER...`);
+         await producer.send({
+            topic: DISPATCHER_TOPIC,
+            messages: [{
+               key: `${pipelineID}__${STREAM_ENDED_KEY}`,
+               value: JSON.stringify(newStreamEndedMessage(pipelineID, data.length)),
+            }],
+         });
       }
    }
 

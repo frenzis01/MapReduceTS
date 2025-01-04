@@ -3,7 +3,7 @@
  * Since we will run everything in Docker, so no problem with the installed modules.
  *  */
 // @ts-ignore
-import { Kafka, logLevel, KafkaMessage, KafkaPartition } from 'kafkajs';
+import { Kafka, logLevel, KafkaMessage } from 'kafkajs';
 // TODO does KafkaMessage really work?
 
 // @ts-ignore
@@ -14,19 +14,20 @@ const MODE = process.argv[2];
 // @ts-ignore
 const GROUP_ID = process.env.GROUP_ID || 'default-group';
 // @ts-ignore
-const N_MAPPERS = process.env.N_MAPPERS || 1;
 import {
-   MessageType,
-   MessageValue,
    unboxKafkaMessage,
    newStreamEndedMessage,
    isStreamEnded,
    newMessageValue,
    newMessageValueShuffled,
    PipelineConfig,
-   stringifyPipeline,
    bitwiseHash,
-   STREAM_ENDED_KEY
+   STREAM_ENDED_KEY,
+   PIPELINE_UPDATE_TOPIC,
+   MAP_TOPIC,
+   SHUFFLE_TOPIC,
+   REDUCE_TOPIC,
+   OUTPUT_TOPIC
 // @ts-ignore
 } from "./utils";
 
@@ -36,20 +37,42 @@ const kafka = new Kafka({
    logLevel: logLevel.NOTHING
 });
 const producer = kafka.producer();
-const consumer = kafka.consumer({ groupId: GROUP_ID || 'default-group' });
+const consumer = kafka.consumer({ groupId: GROUP_ID });
+
+let BUCKET_SIZE: number = 1;
 
 const redis = createClient({
    url: 'redis://redis:6379' // Redis URL matches the service name in docker-compose
 })
 
-const PIPELINE_UPDATE_TOPIC = 'pipeline-updates';
-const MAP_TOPIC = 'map-topic';
-const SHUFFLE_TOPIC = 'shuffle-topic';
-const REDUCE_TOPIC = 'reduce-topic';
-const OUTPUT_TOPIC = 'output-topic';
+async function getBucketSizeWithRetry(maxRetries = 5) {
+   let retries = 0;
 
-// TODO remove and use dispatcher
-const BUCKET_SIZE = 10;
+   await redis.connect();
+
+   while (retries < maxRetries) {
+      const value = await redis.get('BUCKET_SIZE');
+
+      if (value !== null) {
+         const size = parseInt(value);
+         // if BUCKET_SIZE is not a positive integer, exit
+         if (isNaN(BUCKET_SIZE) || BUCKET_SIZE <= 0) {
+            console.error(`[ERROR] BUCKET_SIZE must be a positive integer`);
+            // @ts-ignore
+            process.exit(1);
+         }
+         return size; // Successfully retrieved the value
+      }
+
+      retries++;
+      console.log(`Retry ${retries}/${maxRetries}: BUCKET_SIZE not set. Retrying in 1 second...`);
+
+      await new Promise(resolve => setTimeout(resolve, 1000)); // Wait for 1 second
+   }
+
+   throw new Error('BUCKET_SIZE not set after maximum retries.');
+}
+
 
 // Unique worker ID
 const WORKER_ID = `worker-${Math.random().toString(36).substring(2, 15)}`;
@@ -155,7 +178,8 @@ async function mapMode() {
    await admin.connect();
 
    // We need redis to write to shared counter to synchronize on shuffling
-   await redis.connect();
+   // TODO moved to getBucketSizeWithRetry
+   // await redis.connect();
    consumer.run({
 
       // TODO
@@ -275,7 +299,8 @@ async function shuffleMode() {
    const keyValueStore: { [pipelineID: string]: { [key: string]: string[] } } = {};
 
    // We need redis to read the number of processed messages
-   await redis.connect();
+   // TODO moved to getBucketSizeWithRetry
+   // await redis.connect();
 
    let counter = 0;
 
@@ -411,11 +436,29 @@ async function processMessageReduce(message: KafkaMessage, pipelineConfig: Pipel
 async function main() {
    // We need redis for some shared state to synchronize on shuffling
    redis.on('error', (err: any) => console.error('Redis Client Error', err));
-
+   
    if (MODE === '--map') {
+      // TODO beautify this
+      getBucketSizeWithRetry()
+         .then(bucketSize => {
+            console.log('BUCKET_SIZE:', bucketSize);
+            BUCKET_SIZE = bucketSize;
+         })
+         .catch(error => {
+            console.error(error.message);
+         });
       await listenForPipelineUpdates();
       await mapMode();
    } else if (MODE === '--shuffle') {
+      
+      getBucketSizeWithRetry()
+         .then(bucketSize => {
+            console.log('BUCKET_SIZE:', bucketSize);
+            BUCKET_SIZE = bucketSize;
+         })
+         .catch(error => {
+            console.error(error.message);
+         });
       // This ain't necessary for shuffle
       // await listenForPipelineUpdates();
       await shuffleMode();

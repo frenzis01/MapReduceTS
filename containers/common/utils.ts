@@ -4,6 +4,14 @@ enum MessageType {
    STREAM_SHUFFLED_DATA = 'STREAM_SHUFFLED_DATA',
 }
 
+const DISPATCHER_TOPIC = 'dispatcher-topic';
+const MAP_TOPIC = 'map-topic';
+const SHUFFLE_TOPIC = 'shuffle-topic';
+const REDUCE_TOPIC = 'reduce-topic';
+const OUTPUT_TOPIC = 'output-topic';
+const PIPELINE_UPDATE_TOPIC = 'pipeline-updates';
+
+
 const STREAM_ENDED_KEY = 'STREAM_ENDED';
 const STREAM_ENDED_VALUE = null;
 
@@ -88,6 +96,44 @@ function newMessageValueShuffled(data: any, pipelineID: string): MessageValue {
    };
 }
 
+function newSourceRecord(pipelineID: string, key: number | string, data: any) {
+   // if key is string, hash it
+   if (typeof key === 'string') key = bitwiseHash(key);
+   // TODO 
+   // return newMessageValue( { key, data }, pipelineID);
+   return {
+      pipelineID: pipelineID,
+      type: MessageType.STREAM_DATA,
+      data: { key, data }
+   };
+}
+
+function getPipelineID(input: string): string | null {
+   // Regular expression to match either 
+   // - '__source-record__1325' or 
+   // - '__STREAM_ENDED_KEY'
+   // - '__shuffle-record__key'
+   // with key being any string that does not contain a double underscore __
+   const splitPattern = new RegExp(
+      `__(source-record__\\d+|${STREAM_ENDED_KEY}|shuffle-record__[^_]+(?:_[^_]+)*)$`
+   );
+   // Split the input string using the regular expression
+   const parts = input.split(splitPattern);
+
+   // the expected content parts is: [pipelineID, delimiter, ""]
+   // Note the empty string at the end
+   // The pipelineID is the first part if the split was successful
+   return parts.length === 3 ? parts[0] : null;
+}
+
+function newSourceKey(pipelineID: string, key: number) {
+   return `${pipelineID}__source-record__${key}`;
+}
+
+function parseSourceKey(key: string): { pipelineID: string, keyStr: string} {
+   const [pipelineID, keyStr] = key.split('__source-record__');
+   return { pipelineID, keyStr };
+}
 
 function stringifyPipeline(pipeline: PipelineConfig): string {
    const tmp = {
@@ -127,5 +173,15 @@ export {
    PipelineConfig,
    stringifyPipeline,
    bitwiseHash,
-   STREAM_ENDED_KEY
+   getPipelineID,
+   newSourceRecord,
+   newSourceKey,
+   parseSourceKey,
+   STREAM_ENDED_KEY,
+   DISPATCHER_TOPIC,
+   PIPELINE_UPDATE_TOPIC,
+   MAP_TOPIC,
+   SHUFFLE_TOPIC,
+   REDUCE_TOPIC,
+   OUTPUT_TOPIC,
 }
