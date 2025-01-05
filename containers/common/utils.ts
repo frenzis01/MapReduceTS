@@ -130,7 +130,7 @@ function newSourceKey(pipelineID: string, key: number) {
    return `${pipelineID}__source-record__${key}`;
 }
 
-function parseSourceKey(key: string): { pipelineID: string, keyStr: string} {
+function parseSourceKey(key: string): { pipelineID: string, keyStr: string } {
    const [pipelineID, keyStr] = key.split('__source-record__');
    return { pipelineID, keyStr };
 }
@@ -156,7 +156,7 @@ function bitwiseHash(s: string) {
    if (s.length === 0) return hash;
 
    for (const char of s) {
-       hash ^= char.charCodeAt(0); // Bitwise XOR operation
+      hash ^= char.charCodeAt(0); // Bitwise XOR operation
    }
 
    return hash;

@@ -7,7 +7,7 @@ import fs from 'fs';
 // @ts-ignore
 import path from 'path';
 // @ts-ignore
-import { Kafka, logLevel} from 'kafkajs';
+import { Kafka, logLevel } from 'kafkajs';
 
 // @ts-ignore
 const MODE = process.argv[2];
