@@ -1,5 +1,9 @@
 # Base image
-FROM node:18
+# FROM node:23-alpine
+FROM node:23
+
+# RUN apk add --no-cache iproute2
+RUN apt update && apt install iproute2 -y
 
 # Set working directory
 WORKDIR /usr/src/app
@@ -8,10 +12,10 @@ WORKDIR /usr/src/app
 COPY common/package*.json ./
 RUN npm install
 
-
 # Copy container-specific code
 ARG CONTAINER_NAME
 COPY ${CONTAINER_NAME}/index.ts ./src/index.ts
+
 # Copy shared code
 COPY common/*.ts ./src
 
@@ -20,9 +24,6 @@ COPY common/tsconfig.json ./
 
 # Build TypeScript code
 RUN npm run build
-
-# Verify build output
-# RUN ls -l dist/
 
 # Expose application port (if needed, optional for workers)
 EXPOSE 8080

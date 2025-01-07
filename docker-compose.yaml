@@ -42,6 +42,34 @@ services:
       timeout: 3s
       retries: 5
 
+  pumba:
+    image: gaiaadm/pumba:latest
+    container_name: pumba
+    privileged: true
+    cap_add:
+    - NET_ADMIN
+    command: [
+      "netem",
+      "--duration", "30s",
+      "delay",
+      "--time", "50",
+      "--jitter", "40",
+      # "--tc-image", "gaiadocker/iproute2",
+      "re2:dispatcher|source|mapper|shuffler|reducer|sink"
+    ]
+    volumes:
+    - /var/run/docker.sock:/var/run/docker.sock
+    network_mode: "host"
+    environment:
+      - PUMBA_LOG_LEVEL=debug
+    depends_on:
+      - dispatcher
+      - source
+      - mapper
+      - shuffler
+      - reducer
+      - sink
+
   dispatcher:
     build:
       context: ./containers
@@ -51,12 +79,14 @@ services:
     container_name: dispatcher
     environment:
       GROUP_ID: dispatch-group
-    command: ["sh", "-c", "node dist/index.js 10"]
+    command: ["sh", "-c", "node --trace-warnings dist/index.js 10"]
     depends_on:
       kafka:
         condition: service_healthy
       redis:
         condition: service_healthy
+    cap_add:
+      - NET_ADMIN
 
   source:
     build:
@@ -69,7 +99,7 @@ services:
       GROUP_ID: source-group
     volumes:
       - ./input:/usr/src/app/input
-    command: ["sh", "-c", "sleep 1 && node dist/index.js --source"]
+    command: ["sh", "-c", "sleep 1 && node --trace-warnings dist/index.js --source"]
     depends_on:
       dispatcher:
         condition: service_started
@@ -86,7 +116,7 @@ services:
         CONTAINER_NAME: worker
     environment:
       GROUP_ID: map-group
-    command: ["sh", "-c", "sleep 2 && node dist/index.js --map"]
+    command: ["sh", "-c", "sleep 2 && node --trace-warnings dist/index.js --map"]
     deploy:
       mode: replicated
       replicas: 3
@@ -95,6 +125,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+    cap_add:
+      - NET_ADMIN
 
   shuffler:
     build:
@@ -104,7 +136,7 @@ services:
         CONTAINER_NAME: worker
     environment:
       GROUP_ID: shuffle-group
-    command: ["sh", "-c", "sleep 2 && node dist/index.js --shuffle"]
+    command: ["sh", "-c", "sleep 2 && node --trace-warnings dist/index.js --shuffle"]
     deploy:
       mode: replicated
       replicas: 2
@@ -113,6 +145,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+    cap_add:
+      - NET_ADMIN
 
   reducer:
     build:
@@ -123,12 +157,14 @@ services:
     container_name: reducer
     environment:
       GROUP_ID: reduce-group
-    command: ["sh", "-c", "sleep 2 && node dist/index.js --reduce"]
+    command: ["sh", "-c", "sleep 2 && node --trace-warnings dist/index.js --reduce"]
     depends_on:
       kafka:
         condition: service_healthy
       redis:
         condition: service_healthy
+    cap_add:
+      - NET_ADMIN
 
   sink:
     build:
@@ -141,9 +177,15 @@ services:
       GROUP_ID: sink-group
     volumes:
       - ./output:/usr/src/app/output
-    command: ["sh", "-c", "sleep 2 && node dist/index.js --output"]
+    command: ["sh", "-c", "sleep 2 && node --trace-warnings dist/index.js --output"]
     depends_on:
       kafka:
         condition: service_healthy
       redis:
         condition: service_healthy
+    cap_add:
+      - NET_ADMIN
+
+networks:
+  default:
+    driver: bridge

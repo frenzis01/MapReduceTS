@@ -37,8 +37,8 @@ const producer = kafka.producer();
 const INPUT_FOLDER = './input';
 
 // Pipeline implementing the typical word-count example
-const pipelineWordCount: PipelineConfig = {
-   pipelineID: 'word-count',
+const createPipelineWordCount = (name: string): PipelineConfig => ({
+   pipelineID: 'word-count-' + name,
    keySelector: (message: any) => message.word,
    mapFn: (value: any) => {
       console.log(`[MAP MODE] Mapping type of value: ${typeof value}:${JSON.stringify(value)}`);
@@ -49,7 +49,8 @@ const pipelineWordCount: PipelineConfig = {
    reduceFn: (key: string, values: any[]) => {
       return values.reduce((acc, curr) => acc + curr.count, 0);
    },
-}
+});
+
 
 // Source mode: Reads files from a folder and sends messages to Kafka
 async function sourceMode() {
@@ -63,19 +64,26 @@ async function sourceMode() {
    await pipelinesProducer.connect();
 
    // TODO make this customizable
-   // TODO move to another container
-   console.log(`[SOURCE MODE] Sending pipelineID: ${JSON.stringify(pipelineWordCount.pipelineID)}`);
-   await pipelinesProducer.send({
-      topic: PIPELINE_UPDATE_TOPIC,
-      messages: [{ value: stringifyPipeline(pipelineWordCount) }],
-   });
-   console.log(`[SOURCE MODE] Sent pipelineID: ${JSON.stringify(pipelineWordCount.pipelineID)}`);
-
+   
    // function invoked for each file insise input folder
    const processFile = async (filePath: string) => {
       console.log(`[SOURCE MODE] Processing file: ${filePath}/${fs.existsSync(filePath)}`);
-      if (fs.existsSync(filePath)) {
+      // if file exists and is .txt
+      if (fs.existsSync(filePath) && fs.lstatSync(filePath).isFile() && filePath.endsWith('.txt') 
+         // TODO debug line
+         // && filePath.includes('short')
+      ) {
          console.log(`[SOURCE MODE] Found new file: ${filePath}`);
+         
+         const pipelineWordCount = createPipelineWordCount(path.basename(filePath));
+         console.log(`[SOURCE MODE] Sending pipelineID: ${JSON.stringify(pipelineWordCount.pipelineID)}`);
+         await pipelinesProducer.send({
+            topic: PIPELINE_UPDATE_TOPIC,
+            messages: [{ value: stringifyPipeline(pipelineWordCount) }],
+         });
+         console.log(`[SOURCE MODE] Sent pipelineID: ${JSON.stringify(pipelineWordCount.pipelineID)}`);
+
+
          const fileContent = fs.readFileSync(filePath, 'utf-8');
          const data = fileContent.split('\n')
          const pipelineID = pipelineWordCount.pipelineID;
@@ -83,7 +91,7 @@ async function sourceMode() {
          let shuffled: { [key: string]: string[] } = {};
 
          data.forEach((record: any, index: number) => {
-            console.log(`[SOURCE MODE] type of record : ${typeof record} ${index}`);
+            console.log(`[SOURCE MODE] type of record : ${typeof record} ${index} / ${pipelineID}`);
             producer.send({
                topic: DISPATCHER_TOPIC,
                // We add an index to the key as a reference for partitioning

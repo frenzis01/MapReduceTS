@@ -133,6 +133,7 @@ async function dispatcherMode() {
                   }],
                });
             }
+            return;
          }
 
 
@@ -153,7 +154,7 @@ async function dispatcherMode() {
             topic: MAP_TOPIC,
             messages: [{ key: pipelineID + "__source-record__" + index, value: JSON.stringify(newMessageValue(val.data, pipelineID)) }]
          });
-         console.log(`[DISPATCHER] Sent pipeline ${pipelineID} to map`);
+         console.log(`[DISPATCHER] Sent pipeline ${pipelineID} message to map`);
       },
    });
 
