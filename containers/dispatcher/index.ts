@@ -133,6 +133,7 @@ async function dispatcherMode() {
                   }],
                });
             }
+            return;
          }
 
 
