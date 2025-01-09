@@ -19,7 +19,7 @@ COPY common/*.ts ./src
 COPY common/tsconfig.json ./
 
 # Build TypeScript code
-RUN npm run build
+RUN npm run build --verbose
 
 # Verify build output
 # RUN ls -l dist/

@@ -48,10 +48,8 @@ const redis = createClient({
    url: 'redis://redis:6379' // Redis URL matches the service name in docker-compose
 })
 
-
 const admin = kafka.admin();
 const createTopic = async () => {
-   await admin.connect();
    await admin.createTopics({
       topics: [
          // No parallelization for the first two topics
@@ -65,22 +63,6 @@ const createTopic = async () => {
             numPartitions: 1,
             replicationFactor: 1
          },
-
-         {
-            topic: MAP_TOPIC,
-            numPartitions: BUCKET_SIZE,
-            replicationFactor: 1
-         },
-         {
-            topic: SHUFFLE_TOPIC,
-            numPartitions: BUCKET_SIZE,
-            replicationFactor: 1
-         },
-         {
-            topic: REDUCE_TOPIC,
-            numPartitions: BUCKET_SIZE,
-            replicationFactor: 1
-         },
          {
             topic: OUTPUT_TOPIC,
             numPartitions: BUCKET_SIZE,
@@ -88,20 +70,57 @@ const createTopic = async () => {
          },
       ]
    });
-   await admin.disconnect();
 };
 
 
+async function topicExists(topic: string): Promise<boolean> {
+   const topics = await admin.listTopics();
+   return topics.includes(topic);
+};
+
+async function addPipeline(pipelineID: string, rawValue: any) {
+   console.log(`[DISPATCHER] 00 Received something ${JSON.stringify(rawValue)}`);
+   await admin.createTopics({
+      topics: [
+         {
+            topic: `${MAP_TOPIC}---${pipelineID}`,
+            numPartitions: BUCKET_SIZE,
+            replicationFactor: 1
+         },
+         {
+            topic: `${SHUFFLE_TOPIC}---${pipelineID}`,
+            numPartitions: BUCKET_SIZE,
+            replicationFactor: 1
+         },
+         {
+            topic: `${REDUCE_TOPIC}---${pipelineID}`,
+            numPartitions: BUCKET_SIZE,
+            replicationFactor: 1
+         },
+      ]
+   });
+   console.log(`[DISPATCHER] 10 Received something`);
+   // TODO evaluate if there are multiple pipelineIDs
+   await producer.send({
+      topic: PIPELINE_UPDATE_TOPIC,
+      messages: [{
+         key: pipelineID,
+         value: JSON.stringify(rawValue)
+      }]
+   })
+   console.log(`[DISPATCHER] 20 Received ${pipelineID}`);
+}
+
 // Source mode: Reads files from a folder and sends messages to Kafka
 async function dispatcherMode() {
-
+   // const knownPipelines = new Set<string>();
+   const knownPipelines: { [key: string]: boolean } = {};
    // if BUCKET_SIZE is not a positive integer or not provided, exit
    if (isNaN(BUCKET_SIZE) || BUCKET_SIZE <= 0) {
       console.error(`[ERROR] BUCKET_SIZE must be a positive integer`);
       // @ts-ignore
       process.exit(1);
    }
-
    await redis.connect();
    await redis.set('BUCKET_SIZE', BUCKET_SIZE);
    await redis.quit();
@@ -117,15 +136,26 @@ async function dispatcherMode() {
 
          const { key, val } = unboxKafkaMessage(message);
          console.log(`[DISPATCHER] Received message ${key}`);
+         // console.log(`[DISPATCHER] knownPipelines: ${JSON.stringify(knownPipelines)}`)
 
          const pipelineID = getPipelineID(key);
          if (pipelineID === null) return;
+
+         // if pipeline is not known add it and create topics
+         // TODO check whether val truly holds a pipeline
+         // Ideally the first message of a pipeline should always be the
+         // stringified version of pipelineID, but you may never know.
+         if (!knownPipelines[pipelineID]) {
+            knownPipelines[pipelineID] = true;
+            await addPipeline(pipelineID, val);
+            return;
+         }
 
          if (isStreamEnded(message)) {
             // send to all partitions
             for (let i = 0; i < BUCKET_SIZE; i++) {
                await producer.send({
-                  topic: MAP_TOPIC,
+                  topic: `${MAP_TOPIC}---${pipelineID}`,
                   messages: [{
                      key: `${pipelineID}__${STREAM_ENDED_KEY}`,
                      value: JSON.stringify(newStreamEndedMessage(pipelineID, null)),
@@ -151,7 +181,7 @@ async function dispatcherMode() {
 
          // Send message to map
          await producer.send({
-            topic: MAP_TOPIC,
+            topic: `${MAP_TOPIC}---${pipelineID}`,
             messages: [{ key: pipelineID + "__source-record__" + index, value: JSON.stringify(newMessageValue(val.data, pipelineID)) }]
          });
          console.log(`[DISPATCHER] Sent pipeline ${pipelineID} to map`);
@@ -165,7 +195,9 @@ async function dispatcherMode() {
 
 
 async function main() {
+   await admin.connect();
    await dispatcherMode();
+   await admin.disconnect();
 }
 
 main().catch((error) => {

@@ -20,7 +20,6 @@ import {
    stringifyPipeline,
    STREAM_ENDED_KEY,
    DISPATCHER_TOPIC,
-   PIPELINE_UPDATE_TOPIC,
    OUTPUT_TOPIC,
    // @ts-ignore
 } from "./utils";
@@ -39,7 +38,7 @@ const INPUT_FOLDER = './input';
 // Pipeline implementing the typical word-count example
 const createPipelineWordCount = (name: string): PipelineConfig => ({
    // TODO if name contains '_', hash name
-
+   // TODO if pipelineID+name already exist as topic, increment
    pipelineID: 'word-count-' + name,
    keySelector: (message: any) => message.word,
    mapFn: (value: any) => {
@@ -73,22 +72,24 @@ async function sourceMode() {
       // if file exists and is .txt
       if (fs.existsSync(filePath) && fs.lstatSync(filePath).isFile() && filePath.endsWith('.txt') 
          // TODO debug line
-         // && filePath.includes('short')
+         && filePath.includes('short')
       ) {
          console.log(`[SOURCE MODE] Found new file: ${filePath}`);
          
          const pipelineWordCount = createPipelineWordCount(path.basename(filePath));
-         console.log(`[SOURCE MODE] Sending pipelineID: ${JSON.stringify(pipelineWordCount.pipelineID)}`);
+         const pipelineID = pipelineWordCount.pipelineID;
+         console.log(`[SOURCE MODE] Sending pipelineID: ${JSON.stringify(pipelineID)}`);
          await pipelinesProducer.send({
-            topic: PIPELINE_UPDATE_TOPIC,
-            messages: [{ value: stringifyPipeline(pipelineWordCount) }],
+            topic: DISPATCHER_TOPIC,
+            messages: [ {
+               key: pipelineID + "__source-record__0",
+               value: JSON.stringify(newMessageValue(stringifyPipeline(pipelineWordCount), pipelineID))} ],
          });
-         console.log(`[SOURCE MODE] Sent pipelineID: ${JSON.stringify(pipelineWordCount.pipelineID)}`);
+         console.log(`[SOURCE MODE] Sent pipelineID: ${JSON.stringify(pipelineID)}`);
 
 
          const fileContent = fs.readFileSync(filePath, 'utf-8');
          const data = fileContent.split('\n')
-         const pipelineID = pipelineWordCount.pipelineID;
 
          let shuffled: { [key: string]: string[] } = {};
 
@@ -129,16 +130,16 @@ async function sourceMode() {
             return [key, pipelineWordCount.reduceFn(key, shuffled[key])];
          });
 
-         reduced.forEach(async ([key, value]) => {
-            console.log(`[SOURCE MODE/seq] Sending reduced: ${key}: ${value}`);
-            await producer.send({
-               topic: OUTPUT_TOPIC,
-               messages: [{
-                  key: key,
-                  value: JSON.stringify(newMessageValueShuffled(value, "seq-word-count")),
-               }],
-            });
-         });
+         // reduced.forEach(async ([key, value]) => {
+         //    console.log(`[SOURCE MODE/seq] Sending reduced: ${key}: ${value}`);
+         //    await producer.send({
+         //       topic: OUTPUT_TOPIC,
+         //       messages: [{
+         //          key: key,
+         //          value: JSON.stringify(newMessageValueShuffled(value, "seq-word-count")),
+         //       }],
+         //    });
+         // });
 
 
          // Send to shuffle consumer special value to start feeding the reduce

@@ -17,7 +17,14 @@ import { createClient } from 'redis';
 // @ts-ignore
 const MODE = process.argv[2];
 // @ts-ignore
-const GROUP_ID = process.env.GROUP_ID || 'default-group';
+const GROUP_ID = process.env.GROUP_ID || 'default';
+
+// if MODE or GROUP_ID are not provided, fail
+if (!MODE || GROUP_ID == 'default'){
+   // @ts-ignore
+   process.exit(2);
+}
+
 // @ts-ignore
 import {
    unboxKafkaMessage,
@@ -105,59 +112,26 @@ async function listenForPipelineUpdates() {
             reduceFn: eval(pipelineConfig.reduceFn),
          };
 
-         console.log(`[Pipeline Update] [${GROUP_ID}/${WORKER_ID}] Updated pipeline: ${pipelineConfig.pipelineID}`);
-         console.log(JSON.stringify(Object.keys(unprocessedMessages)));
-         console.log(`${pipelineConfig.pipelineID} | ${!unprocessedMessages[pipelineConfig.pipelineID]}`);
-         // TODO remove prints
-         if (MODE === '--map' && unprocessedMessages[pipelineConfig.pipelineID]) {
-            processUnprocessedMessages(pipelineConfig, processMessageMap);
-         }
-         else if (MODE === '--reduce' && unprocessedMessages[pipelineConfig.pipelineID]) {
-            processUnprocessedMessages(pipelineConfig, processMessageReduce)
-         }
+         console.log(`[Pipeline Update] [${GROUP_ID}/${WORKER_ID}] New pipeline: ${pipelineConfig.pipelineID}`);
 
+         if (MODE === '--map') {
+            console.log(`Subscribing to ${MAP_TOPIC}`);
+            await consumer.subscribe({ topic: `${MAP_TOPIC}---${pipelineConfig.pipelineID}`, fromBeginning: true});
+         } else if (MODE === '--shuffle') {
+            console.log(`Subscribing to ${SHUFFLE_TOPIC}`);
+            await consumer.subscribe({ topic: `${SHUFFLE_TOPIC}---${pipelineConfig.pipelineID}`, fromBeginning: true});
+         } else if (MODE === '--reduce') {
+            console.log(`Subscribing to ${REDUCE_TOPIC}`);
+            await consumer.subscribe({ topic: `${REDUCE_TOPIC}---${pipelineConfig.pipelineID}`, fromBeginning: true});
+         }
       },
    });
 }
-
-function processUnprocessedMessages(pipelineConfig: PipelineConfig, callback: (message: KafkaMessage, pipelineConfig: PipelineConfig) => any) {
-   const pipelineID = pipelineConfig.pipelineID;
-   console.log(`[MAP MODE] Processing unprocessed messages for pipeline: ${pipelineID} | ${unprocessedMessages[pipelineID]?.length}`);
-   // TODO make this async?
-   while (unprocessedMessages[pipelineID].length > 0) {
-      const msg = unprocessedMessages[pipelineID].shift(); // consume the first item
-      if (!msg) { // TODO should not happen... right? 
-         console.log(`[ERROR] No message found in unprocessedMessages`);
-         return;
-      }
-      console.log(`[MAP MODE] Processing unprocessed message: ${msg.timestamp}`);
-      callback(msg, pipelines[pipelineID]);
-   }
-}
-
-let unprocessedMessages: { [pipelineID: string]: KafkaMessage[] } = {}; // Queue for messages with missing pipelineConfig
-
-function enqueueUnprocessedMessage(message: KafkaMessage, pipelineID: string) {
-   // TODO pause consumer if no pipeline available
-   console.log(`[${WORKER_ID}][ERROR] No pipeline found for ID: ${pipelineID}. Delaying message processing`);
-   // Add entry to unprocessedMessages queue if missing
-   if (!unprocessedMessages[pipelineID]) {
-      unprocessedMessages[pipelineID] = [];
-   }
-
-   // Add message to queue
-   unprocessedMessages[pipelineID].push(message);
-   // TODO check ordering of push+foreach
-
-   return; // Skip processing this message for now
-}
-
 
 // Map mode: Applies the map function to incoming messages
 async function mapMode() {
    // Connect and subscribe to Kafka topics
    await consumer.connect();
-   await consumer.subscribe({ topic: MAP_TOPIC, fromBeginning: true });
 
    await producer.connect();
 
@@ -183,15 +157,13 @@ async function mapMode() {
          const pipelineConfig = pipelines[pipelineID];
 
 
-         // TODO need to handle stream_ended_key
          // TODO pause consumer if no pipeline available
          if (!pipelineConfig) {
-            enqueueUnprocessedMessage(message, pipelineID);
             return;
          }
 
+         // TODO delay await?
          await processMessageMap(message, pipelineConfig);
-
       },
    });
 }
@@ -205,15 +177,16 @@ async function processMessageMap(message: KafkaMessage, pipelineConfig: Pipeline
    const { key, val } = unboxKafkaMessage(message);
    // We don't have to wait to propagate it as in shuffle.
    // We can propagate it immediately, and leave the synchronization to the shuffle container
+   const pipelineID = pipelineConfig.pipelineID;
    if (isStreamEnded(message)) {
 
 
       // Increment the counter for the number of ended messages
-      await redis.incr(`${pipelineConfig.pipelineID}-MAP-ENDED-counter`);
+      await redis.incr(`${pipelineID}-MAP-ENDED-counter`);
 
       // Dispatcher sends one STREAM_ENDED message for each partition, i.e. BUCKET_SIZE times
       // We need to wait for all the STREAM_ENDED messages to arrive before starting to send to shuffle
-      const counter = await redis.get(`${pipelineConfig.pipelineID}-MAP-ENDED-counter`);
+      const counter = await redis.get(`${pipelineID}-MAP-ENDED-counter`);
       if (!counter || Number(counter) !== BUCKET_SIZE) {
          // In case we have not yet received all the STREAM_ENDED messages, we simply return,
          // as we are not ready to send to shuffle yet, and we have already incremented the counter
@@ -230,9 +203,9 @@ async function processMessageMap(message: KafkaMessage, pipelineConfig: Pipeline
          // Send onto all partitions
          for (let i = 0; i < BUCKET_SIZE; i++) {
             await producer.send({
-               topic: SHUFFLE_TOPIC,
+               topic: `${SHUFFLE_TOPIC}---${pipelineID}`,
                messages: [{
-                  key: `${pipelineConfig.pipelineID}__${STREAM_ENDED_KEY}`,
+                  key: `${pipelineID}__${STREAM_ENDED_KEY}`,
                   value: JSON.stringify(newStreamEndedMessage(val.pipelineID, null)),
                   partition: i,
                }],
@@ -247,11 +220,11 @@ async function processMessageMap(message: KafkaMessage, pipelineConfig: Pipeline
    for (const result of mapResults) {
       const hashed = bitwiseHash(pipelineConfig.keySelector(result)) % BUCKET_SIZE;
       await producer.send({
-         topic: SHUFFLE_TOPIC,
+         topic: `${SHUFFLE_TOPIC}---${pipelineID}`,
          // items with the same key should go to the same partition, i.e. the same shuffler
          // consider flattening the keys to avoid too many partitions
          // TODO hash the key and use the hash and modulo BUCKET_SIZE to get partition
-         messages: [{ key: pipelineConfig.keySelector(result), value: JSON.stringify(newMessageValue(result, pipelineConfig.pipelineID)) }],
+         messages: [{ key: pipelineConfig.keySelector(result), value: JSON.stringify(newMessageValue(result, pipelineID)) }],
       });
    }
 }
@@ -289,7 +262,8 @@ async function shuffleMode() {
    // Connect and subscribe to Kafka topics
    
    await consumer.connect();
-   await consumer.subscribe({ topic: SHUFFLE_TOPIC, fromBeginning: true });
+   // TODO remove
+   // await consumer.subscribe({ topic: SHUFFLE_TOPIC, fromBeginning: true });
    
    await producer.connect();
    
@@ -338,7 +312,7 @@ async function shuffleMode() {
                await redis.set(`${pipelineID}-SHUFFLE-READY-flag`, `true`);
                for (let i = 0; i < BUCKET_SIZE; i++) {
                   await producer.send({
-                     topic: SHUFFLE_TOPIC,
+                     topic: `${SHUFFLE_TOPIC}---${pipelineID}`,
                      messages: [{
                         key: `${pipelineID}__${STREAM_ENDED_KEY}`,
                         value: JSON.stringify(newStreamEndedMessage(val.pipelineID, val.data)),
@@ -359,7 +333,7 @@ async function shuffleMode() {
                   // Remove tmp
                   const tmp = JSON.stringify(newMessageValueShuffled(keyValueStore[pipelineID][key], pipelineID));
                   await producer.send({
-                     topic: REDUCE_TOPIC,
+                     topic: `${REDUCE_TOPIC}---${pipelineID}`,
                      messages: [{ "key": `${pipelineID}__shuffle-record__${key}`, "value": tmp }],
                   });
                   console.log(tmp);
@@ -385,7 +359,8 @@ async function shuffleMode() {
 async function reduceMode() {
    // Connect and subscribe to Kafka topics
    await consumer.connect();
-   await consumer.subscribe({ topic: REDUCE_TOPIC, fromBeginning: true });
+   // TODO remove
+   // await consumer.subscribe({ topic: REDUCE_TOPIC, fromBeginning: true });
 
    await producer.connect();
 
@@ -402,7 +377,7 @@ async function reduceMode() {
 
          // If no pipelineConfig is found, enqueue the message for later processing
          if (!pipelineConfig) {
-            enqueueUnprocessedMessage(message, pipelineID);
+            // Error?
             return;
          }
          processMessageReduce(message, pipelineConfig);
