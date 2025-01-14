@@ -126,7 +126,7 @@ async function sourceMode() {
           * This helps to get a reference to check if the final parallelized result is correct
           */
          const reduced = Object.keys(shuffled).map((key) => {
-            console.log(`[SOURCE MODE/seq] Reducing: ${key}`);
+            // console.log(`[SOURCE MODE/seq] Reducing: ${key}`);
             return [key, pipelineWordCount.reduceFn(key, shuffled[key])];
          });
 

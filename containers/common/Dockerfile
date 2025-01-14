@@ -1,5 +1,5 @@
 # Base image
-FROM node:18
+FROM node:23
 
 # Set working directory
 WORKDIR /usr/src/app

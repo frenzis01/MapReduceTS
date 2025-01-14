@@ -109,6 +109,8 @@ async function addPipeline(pipelineID: string, rawValue: any) {
       }]
    })
    console.log(`[DISPATCHER] 20 Received ${pipelineID}`);
+   // Sleep 10 seconds
+   await new Promise(resolve => setTimeout(resolve, 2000));
 }
 
 // Source mode: Reads files from a folder and sends messages to Kafka
@@ -182,9 +184,13 @@ async function dispatcherMode() {
          // Send message to map
          await producer.send({
             topic: `${MAP_TOPIC}---${pipelineID}`,
-            messages: [{ key: pipelineID + "__source-record__" + index, value: JSON.stringify(newMessageValue(val.data, pipelineID)) }]
+            messages: [{ 
+               key: pipelineID + "__source-record__" + index, 
+               value: JSON.stringify(newMessageValue(val.data, pipelineID)), 
+               // partition: index 
+            }]
          });
-         console.log(`[DISPATCHER] Sent pipeline ${pipelineID} to map`);
+         console.log(`[DISPATCHER] Sent record:${index} to ${MAP_TOPIC}---${pipelineID}`);
       },
    });
 
