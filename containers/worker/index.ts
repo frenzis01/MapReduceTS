@@ -1,7 +1,7 @@
 /**
  * //TODO implement manual offset commit
  *
- * */ 
+ * */
 
 /**
  * We are suppressing some errors related to installed modules,
@@ -20,7 +20,7 @@ const MODE = process.argv[2];
 const GROUP_ID = process.env.GROUP_ID || 'default';
 
 // if MODE or GROUP_ID are not provided, fail
-if (!MODE || GROUP_ID == 'default'){
+if (!MODE || GROUP_ID == 'default') {
    // @ts-ignore
    process.exit(2);
 }
@@ -47,7 +47,7 @@ import {
 const kafka = new Kafka({
    clientId: 'mapreduce',
    brokers: ['kafka:9092'],
-   logLevel: logLevel.NOTHING
+   logLevel: logLevel.NOTHING,
 });
 const producer = kafka.producer();
 const consumer = kafka.consumer({ groupId: GROUP_ID });
@@ -92,118 +92,153 @@ const WORKER_ID = `worker-${Math.random().toString(36).substring(2, 15)}`;
 
 let pipelines: { [pipelineID: string]: PipelineConfig } = {};
 let newPipelineFlag = false;
+let connectedFlag = false;
 
 // Listen for pipeline updates
 async function listenForPipelineUpdates() {
    // Use unique worker id so that every consumer in map/shuffle/reduce mode gets the pipeline updates
    const pipelinesConsumer = kafka.consumer({ groupId: WORKER_ID });
-   const wakeProducer = kafka.producer();
-   wakeProducer.connect();
    // TODO actually shuffler doesn't need pipelineConfig updates
    await pipelinesConsumer.connect();
    await pipelinesConsumer.subscribe({ topic: PIPELINE_UPDATE_TOPIC, fromBeginning: true });
 
    pipelinesConsumer.run({
-      eachMessage: async ({ message }: { message: KafkaMessage} ) => {
-         console.log(`[Pipeline Update] [${GROUP_ID}/${WORKER_ID}] received msg with TS ${message.timestamp} | ${message.value}`);
-         if (!message.value) return;
-         const pipelineConfig = JSON.parse(message.value.toString());
-         pipelines[pipelineConfig.pipelineID] = {
-            pipelineID: pipelineConfig.pipelineID,
-            keySelector: eval(pipelineConfig.keySelector),
-            mapFn: eval(pipelineConfig.mapFn),
-            reduceFn: eval(pipelineConfig.reduceFn),
-         };
+      eachMessage: async ({ message }: { message: KafkaMessage }) => {
+         try {
+            console.log(`[Pipeline Update] [${GROUP_ID}/${WORKER_ID}] received msg with TS ${message.timestamp} | ${message.value}`);
+            if (!message.value) return;
+            const { key, val } = unboxKafkaMessage(message);
+            const pipelineConfig = JSON.parse(val.data.toString());
+            pipelines[pipelineConfig.pipelineID] = {
+               pipelineID: pipelineConfig.pipelineID,
+               keySelector: eval(pipelineConfig.keySelector),
+               mapFn: eval(pipelineConfig.mapFn),
+               reduceFn: eval(pipelineConfig.reduceFn),
+            };
 
-         console.log(`[Pipeline Update] [${GROUP_ID}/${WORKER_ID}] New pipeline: ${pipelineConfig.pipelineID}`);
 
-         newPipelineFlag = true;
+            newPipelineFlag = true;
 
-         const pipelineID = pipelineConfig.pipelineID;
+            const pipelineID = pipelineConfig.pipelineID;
+            console.log(pipelineConfig);
+            console.log(`[Pipeline Update] [${GROUP_ID}/${WORKER_ID}] New pipeline: ${JSON.stringify(pipelines[pipelineID])}`);
 
-         const getTopicNames = (prefix: string, filter?: string) => {
-            let res: string[] = [];
-            for (const suffix in Object.keys(pipelines)) {
-               if (filter && !suffix.includes(filter)) continue;
-               res.push(`${prefix}---${suffix}`);
+            const getTopicNames = (prefix: string, filter?: string) => {
+               let res: string[] = [];
+               for (const suffix in Object.keys(pipelines)) {
+                  if (filter && !suffix.includes(filter)) continue;
+                  res.push(`${prefix}---${suffix}`);
+               }
+               return res.map(topic => ({ topic }));
+
             }
-            return res.map(topic => ({topic}));
 
+            // let topics: { topic: string }[] = [];
+            if (MODE === '--map') {
+               // topics = getTopicNames(MAP_TOPIC, pipelineID);
+               // if (connectedFlag) {
+               console.log(`Pausing ${MAP_TOPIC}`);
+               // await consumer.pause(topics);
+               await consumer.stop();
+               // console.log(`Disconnecting ${MAP_TOPIC}`);
+               // await consumer.disconnect();
+               // console.log(`Reconnecting`);
+               // await consumer.connect();      
+               console.log(`Subscribing ${MAP_TOPIC}`);
+               await consumer.subscribe({ topic: `${MAP_TOPIC}---${pipelineID}`, fromBeginning: true });
+               // restart consumer.run()
+               mapMode();
+               // }
+
+            } else if (MODE === '--reduce') {
+               // topics = getTopicNames(REDUCE_TOPIC, pipelineID);
+               // if (connectedFlag){
+               console.log(`Pausing ${REDUCE_TOPIC}`);
+               // await consumer.pause(topics);
+               await consumer.stop();
+               // console.log(`Disconnecting ${REDUCE_TOPIC}`);
+               // await consumer.disconnect();
+               // console.log(`Reconnecting`);
+               // await consumer.connect();      
+               console.log(`Subscribing ${REDUCE_TOPIC}`);
+               await consumer.subscribe({ topic: `${REDUCE_TOPIC}---${pipelineID}`, fromBeginning: true });
+               reduceMode();
+
+               // }
+            }
+            // } else if (MODE === '--shuffle') {
+            //    topics = getTopicNames(SHUFFLE_TOPIC,pipelineID);
+            //    console.log(`Pausing ${SHUFFLE_TOPIC}`);
+            //    await consumer.pause(topics);
+            //    await consumer.disconnect();
+            //    console.log(`Disconnected ${SHUFFLE_TOPIC}`);
+            //    await consumer.subscribe({topic: `${SHUFFLE_TOPIC}---${pipelineID}`, fromBeginning: true});
+            // console.log(`Reconnecting`);
+            // await consumer.connect();
+            // console.log(`Resuming ${topics}`);
+            // await consumer.resume(topics);
+            console.log(`Done`);
+            return;
          }
-
-         let topics : {topic: string}[] = [];
-         if (MODE === '--map') {
-            topics = getTopicNames(MAP_TOPIC,pipelineID);
-            console.log(`Pausing ${MAP_TOPIC}`);
-            await consumer.pause(topics);
-            await consumer.disconnect();
-            await consumer.subscribe({topic: `${MAP_TOPIC}---${pipelineID}`, fromBeginning: true});
-
-         } else if (MODE === '--shuffle') {
-            topics = getTopicNames(SHUFFLE_TOPIC,pipelineID);
-            console.log(`Pausing ${SHUFFLE_TOPIC}`);
-            await consumer.pause(topics);
-            await consumer.disconnect();
-            await consumer.subscribe({topic: `${SHUFFLE_TOPIC}---${pipelineID}`, fromBeginning: true});
-         } else if (MODE === '--reduce') {
-            topics = getTopicNames(REDUCE_TOPIC,pipelineID);
-            console.log(`Pausing ${REDUCE_TOPIC}`);
-            await consumer.pause(topics);
-            await consumer.disconnect();
-            await consumer.subscribe({topic: `${REDUCE_TOPIC}---${pipelineID}`, fromBeginning: true});
+         catch (error) {
+            if (error instanceof Error) {
+               console.error(`[Pipeline Update/ERROR] [${GROUP_ID}/${WORKER_ID}] ${error.message}`);
+               if (error.stack) {
+                  console.error(`[Pipeline Update/ERROR] [${GROUP_ID}/${WORKER_ID}] ${error.stack}`);
+               }
+            } else {
+               console.error(`[Pipeline Update/ERROR] [${GROUP_ID}/${WORKER_ID}] Unknown error`, error);
+            }
          }
-
-         await consumer.connect();
-         await consumer.resume(topics);
-         return;
       },
    });
 }
 
 // Map mode: Applies the map function to incoming messages
 async function mapMode() {
-   // Connect and subscribe to Kafka topics
-   await consumer.subscribe({ topic: `${MAP_TOPIC}`, fromBeginning: true });
-   await consumer.connect();
-
-   await producer.connect();
-
-   const admin = await kafka.admin();
-   await admin.connect();
-
-   let localPipelines: { [pipelineID: string]: true } = {};
+   connectedFlag = true;
 
    // We are already connected to redis 
    // redis is needed for synchronization purposes
 
-   consumer.run({
-      
-      // TODO
-      // partitionsConsumedConcurrently: 3, // Default: 1
-      eachMessage: async ({ topic, message } : { topic: any, message: KafkaMessage }) => {
-         // If new pipeline is added, we need to disconnect to subscribe to the new pipeline
-         // and then reconnect
-         if (newPipelineFlag) { }
-         
-         console.log(`[${MODE}/${WORKER_ID}] reading 00 ${message.key?.toString()}`)
-         if (!message.value || !message.key) {
-            console.log(`[MAP MODE] No message value or key found. Skipping...`);
-            return;
+   await consumer.run({
+
+      eachMessage: async ({ topic, message }: { topic: any, message: KafkaMessage }) => {
+
+         try {
+
+            console.log(`[${MODE}/${WORKER_ID}] reading 00 ${message.key?.toString()}`)
+            if (!message.value || !message.key) {
+               console.log(`[MAP MODE] No message value or key found. Skipping...`);
+               return;
+            }
+
+            const pipelineID = getPipelineID(message.key.toString());
+            console.log(pipelineID);
+            if (!pipelineID) return; // Throw error?
+            const pipelineConfig = pipelines[pipelineID];
+
+
+            console.log(`[${MODE}/${WORKER_ID}] reading 10 ${message.key?.toString()}`)
+
+            // TODO pause consumer if no pipeline available
+            if (!pipelineConfig) {
+               return;
+            }
+
+            // TODO delay await?
+            await processMessageMap(message, pipelineConfig);
          }
-         
-         const pipelineID = getPipelineID(message.key.toString());
-         if (!pipelineID) return; // Throw error?
-         const pipelineConfig = pipelines[pipelineID];
-
-         console.log(`[${MODE}/${WORKER_ID}] reading 10 ${message.key?.toString()}`)
-
-         // TODO pause consumer if no pipeline available
-         if (!pipelineConfig) {
-            return;
+         catch (error) {
+            if (error instanceof Error) {
+               console.error(`[MAP MODE] [${GROUP_ID}/${WORKER_ID}] ${error.message}`);
+               if (error.stack) {
+                  console.error(`[MAP MODE] [${GROUP_ID}/${WORKER_ID}] ${error.stack}`);
+               }
+            } else {
+               console.error(`[MAP MODE] [${GROUP_ID}/${WORKER_ID}] Unknown error`, error);
+            }
          }
-
-         // TODO delay await?
-         await processMessageMap(message, pipelineConfig);
       },
    });
 }
@@ -243,7 +278,7 @@ async function processMessageMap(message: KafkaMessage, pipelineConfig: Pipeline
          // Send onto all partitions
          for (let i = 0; i < BUCKET_SIZE; i++) {
             await producer.send({
-               topic: `${SHUFFLE_TOPIC}---${pipelineID}`,
+               topic: `${SHUFFLE_TOPIC}`,
                messages: [{
                   key: `${pipelineID}__${STREAM_ENDED_KEY}`,
                   value: JSON.stringify(newStreamEndedMessage(val.pipelineID, null)),
@@ -256,11 +291,13 @@ async function processMessageMap(message: KafkaMessage, pipelineConfig: Pipeline
       }
    }
 
+   console.log(pipelineConfig);
+   console.log(pipelineConfig.mapFn);
    const mapResults = pipelineConfig.mapFn(val.data);
    for (const result of mapResults) {
       const hashed = bitwiseHash(pipelineConfig.keySelector(result)) % BUCKET_SIZE;
       await producer.send({
-         topic: `${SHUFFLE_TOPIC}---${pipelineID}`,
+         topic: `${SHUFFLE_TOPIC}`,
          // items with the same key should go to the same partition, i.e. the same shuffler
          // consider flattening the keys to avoid too many partitions
          // TODO hash the key and use the hash and modulo BUCKET_SIZE to get partition
@@ -301,22 +338,21 @@ async function printTopicMetadata(admin: any, producer: any, topic: string, pipe
 async function shuffleMode() {
    // Connect and subscribe to Kafka topics
    await consumer.subscribe({ topic: `${SHUFFLE_TOPIC}`, fromBeginning: true });
-   
+
    await consumer.connect();
-   // TODO remove
-   // await consumer.subscribe({ topic: SHUFFLE_TOPIC, fromBeginning: true });
-   
+   connectedFlag = true;
+
    await producer.connect();
-   
+
    // We are already connected to redis 
    // redis is needed for synchronization purposes
-   
+
    // For each pipelineID, we store the key-value pairs
    const keyValueStore: { [pipelineID: string]: { [key: string]: string[] } } = {};
 
    let counter = 0;
 
-   consumer.run({
+   await consumer.run({
       eachMessage: async ({ message }: { message: KafkaMessage }) => {
          console.log(`[${MODE}/${WORKER_ID}] -> ${!message.key || !message.value} | ${message.key?.toString()} ${message.value?.toString()}`)
          if (!message.key || !message.value) return;
@@ -345,6 +381,7 @@ async function shuffleMode() {
             // // TODO get bucket size from dispatcher?
             const streamEndedCounter = await redis.get(`${pipelineID}-SHUFFLE-ENDED-counter`);
             if (!streamEndedCounter || Number(streamEndedCounter) < BUCKET_SIZE) {
+               console.log(`[SHUFFLE MODE] Not yet reached cap`);
                return;
             }
             // if reached the number of STREAM_ENDED messages, wake everyone with a stream Ended message 
@@ -353,7 +390,7 @@ async function shuffleMode() {
                await redis.set(`${pipelineID}-SHUFFLE-READY-flag`, `true`);
                for (let i = 0; i < BUCKET_SIZE; i++) {
                   await producer.send({
-                     topic: `${SHUFFLE_TOPIC}---${pipelineID}`,
+                     topic: `${SHUFFLE_TOPIC}`,
                      messages: [{
                         key: `${pipelineID}__${STREAM_ENDED_KEY}`,
                         value: JSON.stringify(newStreamEndedMessage(val.pipelineID, val.data)),
@@ -366,9 +403,7 @@ async function shuffleMode() {
             // Avoid 'else' so that we send stuff after setting the flag
             if (await redis.get(`${pipelineID}-SHUFFLE-READY-flag`)) {
 
-
                console.log(`[SHUFFLE MODE] [STREAM_ENDED] Sending ${Object.keys(keyValueStore[pipelineID]).length} keys to reduce... from ${counter} messages`);
-
 
                await Promise.all(Object.keys(keyValueStore[pipelineID]).map(async (key) => {
                   // Remove tmp
@@ -398,16 +433,10 @@ async function shuffleMode() {
 
 // Reduce mode: Applies the reduce function and forwards results
 async function reduceMode() {
-   // Connect and subscribe to Kafka topics
-   await consumer.subscribe({ topic: `${SHUFFLE_TOPIC}`, fromBeginning: true });
-   await consumer.connect();
-   // TODO remove
-   // await consumer.subscribe({ topic: REDUCE_TOPIC, fromBeginning: true });
 
-   await producer.connect();
-
-   consumer.run({
+   await consumer.run({
       eachMessage: async ({ message }: { message: KafkaMessage }) => {
+         console.log(`[${MODE}/${WORKER_ID}] -> ${!message.key || !message.value} | ${message.key?.toString()} ${message.value?.toString()}`)
          if (!message.key || !message.value) return;
          console.log(`[${MODE}/${WORKER_ID}] -> ${(message.key.toString())}`)
 
@@ -463,16 +492,20 @@ async function main() {
 
    if (MODE === '--map') {
       getBucketSizeWrapper()
+      // await mapMode();
+      await consumer.connect();
+      await producer.connect();
       await listenForPipelineUpdates();
-      await mapMode();
    } else if (MODE === '--shuffle') {
       getBucketSizeWrapper()
       // This ain't necessary for shuffle
       // await listenForPipelineUpdates();
       await shuffleMode();
    } else if (MODE === '--reduce') {
+      // await reduceMode();
+      await consumer.connect();
+      await producer.connect();
       await listenForPipelineUpdates();
-      await reduceMode();
    } else {
       console.log('[ERROR] No valid mode provided. Use --map, --shuffle, or  --reduce.');
    }

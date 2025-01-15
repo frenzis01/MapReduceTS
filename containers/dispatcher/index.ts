@@ -64,6 +64,11 @@ const createTopic = async () => {
             replicationFactor: 1
          },
          {
+            topic: SHUFFLE_TOPIC,
+            numPartitions: BUCKET_SIZE,
+            replicationFactor: 1
+         },
+         {
             topic: OUTPUT_TOPIC,
             numPartitions: BUCKET_SIZE,
             replicationFactor: 1

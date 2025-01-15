@@ -41,9 +41,9 @@ const createPipelineWordCount = (name: string): PipelineConfig => ({
    // TODO if pipelineID+name already exist as topic, increment
    pipelineID: 'word-count-' + name,
    keySelector: (message: any) => message.word,
+   // Filter is used to avoid having empty strings "" in the array	
+   // console.log(`[MAP MODE] Mapping type of value: ${typeof value}:${JSON.stringify(value)}`);
    mapFn: (value: any) => {
-      console.log(`[MAP MODE] Mapping type of value: ${typeof value}:${JSON.stringify(value)}`);
-      // Filter is used to avoid having empty strings "" in the array	
       const words = value.split(/[^a-zA-Z0-9]+/).filter(Boolean);
       return words.map((word: string) => ({ word, count: 1 }));
    },
@@ -72,7 +72,7 @@ async function sourceMode() {
       // if file exists and is .txt
       if (fs.existsSync(filePath) && fs.lstatSync(filePath).isFile() && filePath.endsWith('.txt') 
          // TODO debug line
-         && filePath.includes('short')
+         // && !filePath.includes('short')
       ) {
          console.log(`[SOURCE MODE] Found new file: ${filePath}`);
          
@@ -130,16 +130,16 @@ async function sourceMode() {
             return [key, pipelineWordCount.reduceFn(key, shuffled[key])];
          });
 
-         // reduced.forEach(async ([key, value]) => {
-         //    console.log(`[SOURCE MODE/seq] Sending reduced: ${key}: ${value}`);
-         //    await producer.send({
-         //       topic: OUTPUT_TOPIC,
-         //       messages: [{
-         //          key: key,
-         //          value: JSON.stringify(newMessageValueShuffled(value, "seq-word-count")),
-         //       }],
-         //    });
-         // });
+         reduced.forEach(async ([key, value]) => {
+            // console.log(`[SOURCE MODE/seq] Sending reduced: ${key}: ${value}`);
+            await producer.send({
+               topic: OUTPUT_TOPIC,
+               messages: [{
+                  key: key,
+                  value: JSON.stringify(newMessageValueShuffled(value, "seq-word-count")),
+               }],
+            });
+         });
 
 
          // Send to shuffle consumer special value to start feeding the reduce
