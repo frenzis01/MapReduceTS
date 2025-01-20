@@ -9,9 +9,6 @@ import path from 'path';
 // @ts-ignore
 import { Kafka, logLevel } from 'kafkajs';
 
-// @ts-ignore
-const MODE = process.argv[2];
-
 import {
    newStreamEndedMessage,
    newMessageValue,
@@ -25,12 +22,16 @@ import {
 } from "./utils";
 // TODO ugly import
 
+console.log(`[SOURCE MODE] Starting source mode...`);
 const kafka = new Kafka({
    clientId: 'mapreduce',
    brokers: ['kafka:9092'],
    logLevel: logLevel.NOTHING
 });
 const producer = kafka.producer();
+// const producer = kafka.producer({
+//       allowAutoTopicCreation: false,
+//    });
 
 
 const INPUT_FOLDER = './input';
@@ -57,16 +58,15 @@ const createPipelineWordCount = (name: string): PipelineConfig => ({
 async function sourceMode() {
 
    console.log('[SOURCE MODE] Monitoring input folder...');
+   // This seems to cause the TimeoutNegativeWarning
    await producer.connect();
-   console.log('[SOURCE MODE] Producer connected to Kafka...');
-
-
    const pipelinesProducer = kafka.producer();
+
    await pipelinesProducer.connect();
 
    // TODO make this customizable
    
-   // function invoked for each file insise input folder
+   // This function is invoked for each file insise input folder
    const processFile = async (filePath: string) => {
       console.log(`[SOURCE MODE] Processing file: ${filePath}/${fs.existsSync(filePath)}`);
       // if file exists and is .txt
@@ -76,9 +76,11 @@ async function sourceMode() {
       ) {
          console.log(`[SOURCE MODE] Found new file: ${filePath}`);
          
+         // Create a pipeline for the word count
          const pipelineWordCount = createPipelineWordCount(path.basename(filePath));
          const pipelineID = pipelineWordCount.pipelineID;
          console.log(`[SOURCE MODE] Sending pipelineID: ${JSON.stringify(pipelineID)}`);
+         // Announce the pipeline to the DISPATCHER
          await pipelinesProducer.send({
             topic: DISPATCHER_TOPIC,
             messages: [ {
@@ -91,6 +93,7 @@ async function sourceMode() {
          const fileContent = fs.readFileSync(filePath, 'utf-8');
          const data = fileContent.split('\n')
 
+         // Used for SEQUENTIAL COMPUTATION
          let shuffled: { [key: string]: string[] } = {};
 
          data.forEach((record: any, index: number) => {
@@ -98,17 +101,22 @@ async function sourceMode() {
             producer.send({
                topic: DISPATCHER_TOPIC,
                // We add an index to the key as a reference for partitioning
-               // we specify the partition to send the message to
-               // note that this is an upper bound on the parallelism degree.
+               // so that dispatcher knows the partition to send the message to
                messages: [{
                   key: pipelineID + "__source-record__" + index,
                   value: JSON.stringify(newMessageValue(record, pipelineID)),
-                  // partition: (index) % 3
+                  // NO explicit partitioning here, dispatcher will handle it
+                  // partition: ...f(index)...
                }],
             });
             console.log(`[SOURCE MODE] Sent record: ${JSON.stringify(record)}`);
 
-            // Compute locally and sequentially
+            // ------------ SEQUENTIAL COMPUTATION ------------
+            /**
+             * SEQUENTIAL COMPUTATION
+             * We compute sequentially and locally the map and reduce functions
+             * so that we can compare the results with the parallelized version
+             */
             const results = pipelineWordCount.mapFn(record);
             results.forEach((v: string) => {
                const key = pipelineWordCount.keySelector(v);
@@ -122,6 +130,7 @@ async function sourceMode() {
 
 
          /**
+          * SEQUENTIAL COMPUTATION
           * Reduce locally and sequentially
           * This helps to get a reference to check if the final parallelized result is correct
           */
@@ -140,9 +149,10 @@ async function sourceMode() {
                }],
             });
          });
+         // ------------ END OF SEQUENTIAL COMPUTATION ------------
 
 
-         // Send to shuffle consumer special value to start feeding the reduce
+         // Send to special value to signal the end of the data stream
          console.log(`[SOURCE MODE] Sending stream ended message to DISPATCHER...`);
          await producer.send({
             topic: DISPATCHER_TOPIC,
@@ -154,6 +164,7 @@ async function sourceMode() {
       }
    }
 
+   // Invoke the above function for each text file in the input folder
    let files = fs.readdirSync(INPUT_FOLDER);
    console.log(`[SOURCE MODE] Found ${files.length} existing files in ${INPUT_FOLDER}`);
    files.forEach(async (file: any) => {
@@ -163,9 +174,6 @@ async function sourceMode() {
    });
 
 }
-
-
-
 
 
 async function main() {

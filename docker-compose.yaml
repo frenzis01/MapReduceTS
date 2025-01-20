@@ -69,7 +69,7 @@ services:
       GROUP_ID: source-group
     volumes:
       - ./input:/usr/src/app/input
-    command: ["sh", "-c", "sleep 1 && node --trace-warnings dist/index.js --source"]
+    command: ["sh", "-c", "node --trace-warnings dist/index.js --source"]
     depends_on:
       dispatcher:
         condition: service_started
@@ -86,7 +86,7 @@ services:
         CONTAINER_NAME: worker
     environment:
       GROUP_ID: map-group
-    command: ["sh", "-c", "sleep 2 && node --trace-warnings dist/index.js --map"]
+    command: ["sh", "-c", "node --trace-warnings dist/index.js --map"]
     deploy:
       mode: replicated
       replicas: 3
@@ -104,11 +104,13 @@ services:
         CONTAINER_NAME: worker
     environment:
       GROUP_ID: shuffle-group
-    command: ["sh", "-c", "sleep 2 && node --trace-warnings dist/index.js --shuffle"]
+    command: ["sh", "-c", "node --trace-warnings dist/index.js --shuffle"]
     deploy:
       mode: replicated
       replicas: 2
     depends_on:
+      dispatcher:
+        condition: service_started
       kafka:
         condition: service_healthy
       redis:
@@ -123,7 +125,7 @@ services:
     container_name: reducer
     environment:
       GROUP_ID: reduce-group
-    command: ["sh", "-c", "sleep 2 && node --trace-warnings dist/index.js --reduce"]
+    command: ["sh", "-c", "node --trace-warnings dist/index.js --reduce"]
     depends_on:
       kafka:
         condition: service_healthy
@@ -141,7 +143,7 @@ services:
       GROUP_ID: sink-group
     volumes:
       - ./output:/usr/src/app/output
-    command: ["sh", "-c", "sleep 2 && node --trace-warnings dist/index.js --output"]
+    command: ["sh", "-c", "node --trace-warnings dist/index.js --output"]
     depends_on:
       kafka:
         condition: service_healthy
