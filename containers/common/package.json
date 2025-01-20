@@ -1,21 +1,20 @@
 {
-   "name": "mapreduce-framework",
-   "version": "1.0.0",
-   "description": "MapReduce framework using Kafka and TypeScript",
-   "main": "dist/index.js",
-   "scripts": {
-     "build": "tsc",
-     "start": "node dist/index.js"
-   },
-   "dependencies": {
-     "fs": "^0.0.1-security",
-     "kafkajs": "^2.2.4",
-     "redis" : "^4.0.0"
-   },
-   "devDependencies": {
-     "@types/fs-extra": "^9.0.13",
-     "@types/node": "^20.4.2",
-     "typescript": "^5.2.2"
-   }
- }
- 
+  "name": "mapreduce-framework",
+  "version": "1.0.0",
+  "description": "MapReduce framework using Kafka and TypeScript",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "fs": "^0.0.1-security",
+    "kafkajs": "^2.2.4",
+    "redis": "^4.7.0"
+  },
+  "devDependencies": {
+    "@types/fs-extra": "^11.0.4",
+    "@types/node": "^22.10.4",
+    "typescript": "^5.7.2"
+  }
+}

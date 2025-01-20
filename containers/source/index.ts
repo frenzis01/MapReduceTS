@@ -72,7 +72,7 @@ async function sourceMode() {
       // if file exists and is .txt
       if (fs.existsSync(filePath) && fs.lstatSync(filePath).isFile() && filePath.endsWith('.txt') 
          // TODO debug line
-         && !filePath.includes('short')
+         // && filePath.includes('short')
       ) {
          console.log(`[SOURCE MODE] Found new file: ${filePath}`);
          
