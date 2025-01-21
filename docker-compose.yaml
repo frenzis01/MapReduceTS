@@ -77,6 +77,27 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+  
+  source-2:
+    build:
+      context: ./containers
+      dockerfile: common/Dockerfile
+      args:
+        CONTAINER_NAME: source-2
+    container_name: source-2
+    environment:
+      GROUP_ID: source-group
+    volumes:
+      - ./input:/usr/src/app/input
+    command: ["sh", "-c", "node --trace-warnings dist/index.js --source"]
+    depends_on:
+      dispatcher:
+        condition: service_started
+      kafka:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+  
 
   mapper:
     build:

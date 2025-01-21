@@ -110,6 +110,7 @@ async function listenForPipelineUpdates() {
             pipelines[pipelineConfig.pipelineID] = {
                pipelineID: pipelineConfig.pipelineID,
                keySelector: eval(pipelineConfig.keySelector),
+               dataSelector: eval(pipelineConfig.dataSelector),
                mapFn: eval(pipelineConfig.mapFn),
                reduceFn: eval(pipelineConfig.reduceFn),
             };
@@ -172,7 +173,7 @@ async function mapMode() {
 
          try {
 
-            console.log(`[${MODE}/${WORKER_ID}] reading 00 ${message.key?.toString()}`)
+            // console.log(`[${MODE}/${WORKER_ID}] reading 00 ${message.key?.toString()}`)
             if (!message.value || !message.key) {
                console.log(`[MAP MODE] No message value or key found. Skipping...`);
                return;
@@ -184,7 +185,7 @@ async function mapMode() {
             const pipelineConfig = pipelines[pipelineID];
 
 
-            console.log(`[${MODE}/${WORKER_ID}] reading 10 ${message.key?.toString()}`)
+            // console.log(`[${MODE}/${WORKER_ID}] reading 10 ${message.key?.toString()}`)
 
             // TODO pause consumer if no pipeline available
             if (!pipelineConfig) {
@@ -258,23 +259,27 @@ async function processMessageMap(message: KafkaMessage, pipelineConfig: Pipeline
          return;
       }
    }
-
-   // console.log(pipelineConfig);
-   // console.log(pipelineConfig.mapFn);
    const mapResults = pipelineConfig.mapFn(val.data);
-   for (const result of mapResults) {
-      const hashed = bitwiseHash(pipelineConfig.keySelector(result)) % BUCKET_SIZE;
-      await producer.send({
-         topic: `${SHUFFLE_TOPIC}`,
-         // items with the same key should go to the same partition, i.e. the same shuffler
-         // consider flattening the keys to avoid too many partitions
-         // TODO hash the key and use the hash and modulo BUCKET_SIZE to get partition
-         messages: [{ 
-            key: pipelineConfig.keySelector(result), 
-            value: JSON.stringify(newMessageValue(result, pipelineID)), 
-            // partition: hashed 
-         }],
-      });
+   // mapResults is something like
+   // [[{word: 'abg', count: 1}], [{word: 'abg', count: 1}], [{word: 'agg', count: 1}]]
+   for (const arr of mapResults) {
+
+      for (const result of arr) {
+         const resData = pipelineConfig.dataSelector(result);
+         const resKey = pipelineConfig.keySelector(result);
+         // TODO this shold not be necessary, see below
+         // const hashed = bitwiseHash(pipelineConfig.keySelector(result)) % BUCKET_SIZE;
+         await producer.send({
+            topic: `${SHUFFLE_TOPIC}`,
+            // items with the same key should go to the same partition, i.e. the same shuffler
+            // No need to flatten the keys since the #partitions is fixed
+            messages: [{
+               key: resKey,
+               value: JSON.stringify(newMessageValue(resData, pipelineID)),
+               // partition: hashed 
+            }],
+         });
+      }
    }
 }
 
@@ -388,8 +393,11 @@ async function shuffleMode() {
                console.log(`[SHUFFLE MODE] [STREAM_ENDED] Sending ${Object.keys(keyValueStore[pipelineID]).length} keys to reduce... from ${counter} messages`);
 
                await Promise.all(Object.keys(keyValueStore[pipelineID]).map(async (key) => {
-                  // Remove tmp
-                  const tmp = JSON.stringify(newMessageValueShuffled(keyValueStore[pipelineID][key], pipelineID));
+                  const tmp = JSON.stringify(
+                     newMessageValueShuffled(
+                        // Flatten the array of arrays [[v1],[v2],...] -> [v1,v2,...]
+                        keyValueStore[pipelineID][key].flat(),
+                        pipelineID));
                   await producer.send({
                      topic: `${REDUCE_TOPIC}---${pipelineID}`,
                      messages: [{ "key": `${pipelineID}__shuffle-record__${key}`, "value": tmp }],

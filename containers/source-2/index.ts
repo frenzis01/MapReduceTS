@@ -36,25 +36,69 @@ const producer = kafka.producer({
 const INPUT_FOLDER = './input';
 
 // Pipeline implementing the typical word-count example
-const createPipelineWordCount = (name: string): PipelineConfig => ({
+const createPipelineWordRand = (name: string): PipelineConfig => ({
    // TODO if name contains '_', hash name
    // TODO if pipelineID+name already exist as topic, increment
-   pipelineID: 'word-count-' + name,
+   pipelineID: 'word-rand-' + name,
    keySelector: (message: any) => message.word,
-   dataSelector: (message: any) => message.count,
+   dataSelector: (message: any) => message.data,
    // Filter is used to avoid having empty strings "" in the array	
    // console.log(`[MAP MODE] Mapping type of value: ${typeof value}:${JSON.stringify(value)}`);
    mapFn: (value: any) => {
-      // Map should take (k,v) and return an array of (k2,v2) pairs
-      // Here we don't have any v.
-      // We just have a string, so we need to split it into words
       const words = value.split(/[^a-zA-Z0-9]+/).filter(Boolean);
-      // Return an array with a single element, which is an array of (word, 1)
-      return words.map((word: string) => ([{ word, count: 1 }])); // 
+      const foo = (s: string) => {
+         // Take each letter and repeat it a random number of times
+         return s
+            .split('')
+            .map((char) => {
+               const randomRepeat = Math.floor(Math.random() * 10);
+               return char.repeat(randomRepeat);
+            })
+            // .join(''); // Join the array of repeated characters into a string
+      }
+      return words.map((word: string) => ([
+         { word: word.toLowerCase(), data: foo(word.toLowerCase()) },
+         { word: word.toUpperCase(), data: foo(word.toUpperCase()) }
+      ])); // Call foo(word) here
    },
    reduceFn: (key: string, values: any[]) => {
-      // Reduce takes as input a key and an array of `data` (count)
-      return values.reduce((acc, count) => acc + count, 0);
+      // Count how many times key is contained inside the repeated characters
+      
+      // cast values to string[] from any[]
+      // data is an array of strings of repeated characters like
+      // ['aa', 'bbb', 'aaaa', 'ccc']
+      console.log(`[REDUCE MODE] Reducing: ${key} with data: ${JSON.stringify(values)}`);
+
+      
+      let maxCount = 0;
+         const keyCharCount : { [c: string]: number } = {};
+         // Populate and initiate the keyCharCount object
+         for (const char of key) {
+            keyCharCount[char] = 0;
+         }
+         
+         // for each char in data count occurences/length
+         for (const str of values) {
+            // Here we assume that the strings are actually only one character repeated,
+            // with no more than one distinct char
+            const char = str.charAt(0);
+            if (char in keyCharCount) {
+            keyCharCount[char] += str.length;
+         }
+      }
+      
+      
+      // Subtract from keyCharCount the key chars until we get a negative value
+      let count = 0;
+      counterLoop: while (count < Math.max(...Object.values(keyCharCount))) {
+         for (const char of key) {
+            keyCharCount[char]--;
+            if (keyCharCount[char] < 0)
+               break counterLoop;
+         }
+         count++;
+      }
+      return count;
    },
 });
 
@@ -82,15 +126,15 @@ async function sourceMode() {
          console.log(`[SOURCE MODE] Found new file: ${filePath}`);
          
          // Create a pipeline for the word count
-         const pipelineWordCount = createPipelineWordCount(path.basename(filePath));
-         const pipelineID = pipelineWordCount.pipelineID;
+         const pipelineWordRand = createPipelineWordRand(path.basename(filePath));
+         const pipelineID = pipelineWordRand.pipelineID;
          console.log(`[SOURCE MODE] Sending pipelineID: ${JSON.stringify(pipelineID)}`);
          // Announce the pipeline to the DISPATCHER
          await pipelinesProducer.send({
             topic: DISPATCHER_TOPIC,
             messages: [ {
                key: pipelineID + "__source-record__0",
-               value: JSON.stringify(newMessageValue(stringifyPipeline(pipelineWordCount), pipelineID))} ],
+               value: JSON.stringify(newMessageValue(stringifyPipeline(pipelineWordRand), pipelineID))} ],
          });
          console.log(`[SOURCE MODE] Sent pipelineID: ${JSON.stringify(pipelineID)}`);
 
@@ -122,16 +166,17 @@ async function sourceMode() {
              * We compute sequentially and locally the map and reduce functions
              * so that we can compare the results with the parallelized version
              */
-            const results = pipelineWordCount.mapFn(record);
-            // [[{word: 'abg', count: 1}], [{word: 'abg', count: 1}], [{word: 'agg', count: 1}]]
-            results.forEach((v: Object[]) => {
-               v.forEach((v) => {
-                  const key = pipelineWordCount.keySelector(v);
-                  if (!shuffled[key]) {
-                     shuffled[key] = [];
-                  }
-                  shuffled[key].push(pipelineWordCount.dataSelector(v));                  
-               })
+            console.log(`[SOURCE MODE/seq] Mapping: ${record}`);
+            const results = pipelineWordRand.mapFn(record);
+            results
+               .flat()
+               .forEach((v: any) => {
+               const key = pipelineWordRand.keySelector(v);
+               // console.log(`[SOURCE MODE/seq] Shuffling: ${key}`);
+               if (!shuffled[key]) {
+                  shuffled[key] = [];
+               }
+               shuffled[key].push(pipelineWordRand.dataSelector(v));
 
             });
          });
@@ -143,8 +188,8 @@ async function sourceMode() {
           * This helps to get a reference to check if the final parallelized result is correct
           */
          const reduced = Object.keys(shuffled).map((key) => {
-            // console.log(`[SOURCE MODE/seq] Reducing: ${key}`);
-            return [key, pipelineWordCount.reduceFn(key, shuffled[key])];
+            console.log(`[SOURCE MODE/seq] Reducing: ${key}`);
+            return [key, pipelineWordRand.reduceFn(key, shuffled[key].flat())];
          });
 
          reduced.forEach(async ([key, value]) => {
@@ -153,7 +198,7 @@ async function sourceMode() {
                topic: OUTPUT_TOPIC,
                messages: [{
                   key: key,
-                  value: JSON.stringify(newMessageValueShuffled(value, "seq-word-count")),
+                  value: JSON.stringify(newMessageValueShuffled(value, "seq-word-rand")),
                }],
             });
          });

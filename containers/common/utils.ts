@@ -75,6 +75,7 @@ function isStreamEnded(message: KafkaMessage): boolean {
 interface PipelineConfig {
    pipelineID: string;
    keySelector: (message: any) => string;
+   dataSelector: (message: any) => any;
    mapFn: (value: any) => any[];
    reduceFn: (key: string, values: any[]) => any;
 }
@@ -139,6 +140,7 @@ function stringifyPipeline(pipeline: PipelineConfig): string {
    const tmp = {
       pipelineID: pipeline.pipelineID,
       keySelector: pipeline.keySelector.toString(),
+      dataSelector: pipeline.dataSelector.toString(),
       mapFn: pipeline.mapFn.toString(),
       reduceFn: pipeline.reduceFn.toString(),
    }
