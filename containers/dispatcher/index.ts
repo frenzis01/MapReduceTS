@@ -146,6 +146,11 @@ async function dispatcherMode() {
          if (isStreamEnded(message)) {
             console.log(`[DISPATCHER] Forwarding STREAM_ENDED for ${pipelineID} to all MAP partitions`);
             // send to all partitions
+            // TODO could i send this to a single partition?
+            // and let mappers propagate to all mappers?
+            // I think not, there may be a race condition.
+            // Mapper receiving the message may propagate it before other source
+            // records are received.
             for (let i = 0; i < BUCKET_SIZE; i++) {
                await producer.send({
                   topic: `${MAP_TOPIC}---${pipelineID}`,
