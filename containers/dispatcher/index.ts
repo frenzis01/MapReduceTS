@@ -78,22 +78,11 @@ const createTopic = async () => {
 };
 
 
-async function topicExists(topic: string): Promise<boolean> {
-   const topics = await admin.listTopics();
-   return topics.includes(topic);
-};
-
 async function addPipeline(pipelineID: string, rawValue: any) {
-   console.log(`[DISPATCHER] 00 Received something ${JSON.stringify(rawValue)}`);
    await admin.createTopics({
       topics: [
          {
             topic: `${MAP_TOPIC}---${pipelineID}`,
-            numPartitions: BUCKET_SIZE,
-            replicationFactor: 1
-         },
-         {
-            topic: `${SHUFFLE_TOPIC}---${pipelineID}`,
             numPartitions: BUCKET_SIZE,
             replicationFactor: 1
          },
@@ -104,7 +93,6 @@ async function addPipeline(pipelineID: string, rawValue: any) {
          },
       ]
    });
-   console.log(`[DISPATCHER] 10 Received something`);
    // TODO evaluate if there are multiple pipelineIDs
    await producer.send({
       topic: PIPELINE_UPDATE_TOPIC,
@@ -113,14 +101,13 @@ async function addPipeline(pipelineID: string, rawValue: any) {
          value: JSON.stringify(rawValue)
       }]
    })
-   console.log(`[DISPATCHER] 20 Received ${pipelineID}`);
+   console.log(`[DISPATCHER] Received ${pipelineID}`);
    // Sleep 10 seconds
    await new Promise(resolve => setTimeout(resolve, 2000));
 }
 
 // Source mode: Reads files from a folder and sends messages to Kafka
 async function dispatcherMode() {
-   // const knownPipelines = new Set<string>();
    const knownPipelines: { [key: string]: boolean } = {};
    // if BUCKET_SIZE is not a positive integer or not provided, exit
    if (isNaN(BUCKET_SIZE) || BUCKET_SIZE <= 0) {
@@ -142,8 +129,6 @@ async function dispatcherMode() {
       eachMessage: async ({ message }) => {
 
          const { key, val } = unboxKafkaMessage(message);
-         console.log(`[DISPATCHER] Received message ${key}`);
-         // console.log(`[DISPATCHER] knownPipelines: ${JSON.stringify(knownPipelines)}`)
 
          const pipelineID = getPipelineID(key);
          if (pipelineID === null) return;
@@ -159,6 +144,7 @@ async function dispatcherMode() {
          }
 
          if (isStreamEnded(message)) {
+            console.log(`[DISPATCHER] Forwarding STREAM_ENDED for ${pipelineID} to all MAP partitions`);
             // send to all partitions
             for (let i = 0; i < BUCKET_SIZE; i++) {
                await producer.send({
@@ -186,6 +172,9 @@ async function dispatcherMode() {
          // index is used to compute the partition to send the message to
          const index = k % BUCKET_SIZE;
 
+         if (k === 1) {
+            console.log(`[DISPATCHER] Started forwarding messages for ${pipelineID}`);
+         }
          // Send message to map
          await producer.send({
             topic: `${MAP_TOPIC}---${pipelineID}`,
@@ -195,7 +184,6 @@ async function dispatcherMode() {
                // partition: index 
             }]
          });
-         console.log(`[DISPATCHER] Sent record:${index} to ${MAP_TOPIC}---${pipelineID}`);
       },
    });
 

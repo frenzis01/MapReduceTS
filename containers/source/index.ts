@@ -18,6 +18,7 @@ import {
    STREAM_ENDED_KEY,
    DISPATCHER_TOPIC,
    OUTPUT_TOPIC,
+   bitwiseHash,
    // @ts-ignore
 } from "./utils";
 // TODO ugly import
@@ -29,34 +30,42 @@ const kafka = new Kafka({
    logLevel: logLevel.NOTHING
 });
 const producer = kafka.producer({
-      allowAutoTopicCreation: false,
-   });
+   allowAutoTopicCreation: false,
+});
 
 
 const INPUT_FOLDER = './input';
 
 // Pipeline implementing the typical word-count example
-const createPipelineWordCount = (name: string): PipelineConfig => ({
+const createPipelineWordCount = (name: string): PipelineConfig => {
+   if (name.includes('_')) {
+      name = bitwiseHash(name).toString();
+   };
+   // Add random suffix of 6 chars to avoid conflicts for files with the same name
+   const suffix = Math.random().toString(16).substring(2, 8);
+   name = `${name}${suffix}`
+
    // TODO if name contains '_', hash name
    // TODO if pipelineID+name already exist as topic, increment
-   pipelineID: 'word-count-' + name,
-   keySelector: (message: any) => message.word,
-   dataSelector: (message: any) => message.count,
-   // Filter is used to avoid having empty strings "" in the array	
-   // console.log(`[MAP MODE] Mapping type of value: ${typeof value}:${JSON.stringify(value)}`);
-   mapFn: (value: any) => {
-      // Map should take (k,v) and return an array of (k2,v2) pairs
-      // Here we don't have any v.
-      // We just have a string, so we need to split it into words
-      const words = value.split(/[^a-zA-Z0-9]+/).filter(Boolean);
-      // Return an array with a single element, which is an array of (word, 1)
-      return words.map((word: string) => ([{ word, count: 1 }])); // 
-   },
-   reduceFn: (key: string, values: any[]) => {
-      // Reduce takes as input a key and an array of `data` (count)
-      return values.reduce((acc, count) => acc + count, 0);
-   },
-});
+   return {
+      pipelineID: 'word-count-' + name,
+      keySelector: (message: any) => message.word,
+      dataSelector: (message: any) => message.count,
+      // Filter is used to avoid having empty strings "" in the array	
+      mapFn: (value: any) => {
+         // Map should take (k,v) and return an array of (k2,v2) pairs
+         // Here we don't have any v.
+         // We just have a string, so we need to split it into words
+         const words = value.split(/[^a-zA-Z0-9]+/).filter(Boolean);
+         // Return an array with a single element, which is an array of (word, 1)
+         return words.map((word: string) => ([{ word, count: 1 }])); // 
+      },
+      reduceFn: (key: string, values: any[]) => {
+         // Reduce takes as input a key and an array of `data` (count)
+         return values.reduce((acc, count) => acc + count, 0);
+      }
+   }
+};
 
 
 // Source mode: Reads files from a folder and sends messages to Kafka
@@ -69,28 +78,25 @@ async function sourceMode() {
 
    await pipelinesProducer.connect();
 
-   // TODO make this customizable
-   
    // This function is invoked for each file insise input folder
    const processFile = async (filePath: string) => {
-      console.log(`[SOURCE MODE] Processing file: ${filePath}/${fs.existsSync(filePath)}`);
       // if file exists and is .txt
-      if (fs.existsSync(filePath) && fs.lstatSync(filePath).isFile() && filePath.endsWith('.txt') 
+      if (fs.existsSync(filePath) && fs.lstatSync(filePath).isFile() && filePath.endsWith('.txt')
          // TODO debug line
          // && filePath.includes('short')
       ) {
-         console.log(`[SOURCE MODE] Found new file: ${filePath}`);
-         
+         console.log(`[SOURCE MODE] Processing file: ${filePath}`);
+
          // Create a pipeline for the word count
          const pipelineWordCount = createPipelineWordCount(path.basename(filePath));
          const pipelineID = pipelineWordCount.pipelineID;
-         console.log(`[SOURCE MODE] Sending pipelineID: ${JSON.stringify(pipelineID)}`);
          // Announce the pipeline to the DISPATCHER
          await pipelinesProducer.send({
             topic: DISPATCHER_TOPIC,
-            messages: [ {
+            messages: [{
                key: pipelineID + "__source-record__0",
-               value: JSON.stringify(newMessageValue(stringifyPipeline(pipelineWordCount), pipelineID))} ],
+               value: JSON.stringify(newMessageValue(stringifyPipeline(pipelineWordCount), pipelineID))
+            }],
          });
          console.log(`[SOURCE MODE] Sent pipelineID: ${JSON.stringify(pipelineID)}`);
 
@@ -98,11 +104,10 @@ async function sourceMode() {
          const fileContent = fs.readFileSync(filePath, 'utf-8');
          const data = fileContent.split('\n')
 
-         // Used for SEQUENTIAL COMPUTATION
+         // shuffled is used for SEQUENTIAL COMPUTATION
          let shuffled: { [key: string]: string[] } = {};
 
          data.forEach((record: any, index: number) => {
-            console.log(`[SOURCE MODE] type of record : ${typeof record} ${index} / ${pipelineID}`);
             producer.send({
                topic: DISPATCHER_TOPIC,
                // We add an index to the key as a reference for partitioning
@@ -114,7 +119,6 @@ async function sourceMode() {
                   // partition: ...f(index)...
                }],
             });
-            console.log(`[SOURCE MODE] Sent record: ${JSON.stringify(record)}`);
 
             // ------------ SEQUENTIAL COMPUTATION ------------
             /**
@@ -130,7 +134,7 @@ async function sourceMode() {
                   if (!shuffled[key]) {
                      shuffled[key] = [];
                   }
-                  shuffled[key].push(pipelineWordCount.dataSelector(v));                  
+                  shuffled[key].push(pipelineWordCount.dataSelector(v));
                })
 
             });
@@ -158,6 +162,7 @@ async function sourceMode() {
             });
          });
          // ------------ END OF SEQUENTIAL COMPUTATION ------------
+         console.log(`[SOURCE] Sequential computation done`);
 
 
          // Send to special value to signal the end of the data stream
@@ -176,7 +181,6 @@ async function sourceMode() {
    let files = fs.readdirSync(INPUT_FOLDER);
    console.log(`[SOURCE MODE] Found ${files.length} existing files in ${INPUT_FOLDER}`);
    files.forEach(async (file: any) => {
-      console.log(`[SOURCE MODE] Processing existing file: ${file} in ${INPUT_FOLDER}`);
       const filePath = path.join(INPUT_FOLDER, file);
       await processFile(filePath);
    });
