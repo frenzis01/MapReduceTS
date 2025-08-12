@@ -3,8 +3,9 @@
 
 
 This is the report of the project developed for the ``Scalable and Distributed Computing'' held at UniPi during the academic year 2024/25 by Prof. Dazzi.
-The project developed consists of a implementation in TypeScript of the MapReduce framework exploiting Kafka for message delivery and Docker for the deployment.
-The purpose was \textit{not} to develop a highly-performant resilient implementation of MapReduce, we have discussed other implementations such as Hadoop and Spark which work fine and surely won't be outperformed by a small project developed by a university student \smiley. The intent was instead to define a problem whose resolution would led to face, from a practical point of view, some of the issues and concepts highlighted during lectures which arise when dealing with distributed applications.
+The developed project consists of a implementation in TypeScript of the MapReduce framework exploiting Kafka for message delivery and Docker for the deployment.
+The purpose was \textit{not} to develop a highly-performant resilient implementation of MapReduce, we have discussed other implementations such as Hadoop and Spark which work fine and surely won't be outperformed by a small project developed by a university student \smiley. \\
+The intent was instead to define a problem whose resolution would led to face, from a practical point of view, some of the issues and concepts ---highlighted during lectures---6 which arise when dealing with distributed applications.
 
 This report will initially describe the main features and architecture of the implementation, to later discuss how it works under the hood and how it relates to the concepts discussed in the course.
 
@@ -29,17 +30,16 @@ This report will initially describe the main features and architecture of the im
    \label{fig:mapreduce}
 \end{figure}
 
-{As we have discussed MapReduce during the lectures, it includes the steps depicted in Fig. \ref{fig:mapreduce}, i.e.:\ns
+{MapReduce, as we have discussed it, during the lectures, includes the steps depicted in Fig. \ref{fig:mapreduce}, i.e.:\ns
 \begin{enumerate}
    \item Input/Splitting
-   \item \textbf{Mapping} - \lstinline{map(k1,v1) -> [(k2,v2),...]} is a function taking a pair of data and returning a list of pairs of new keys paired with values, and is applied in parallel to all input data.
-   \footnote{\href{https://en.wikipedia.org/wiki/MapReduce}{wikipedia.org/MapReduce}}
+   \item \textbf{Mapping} - \lstinline{map(k1,v1) -> [(k2,v2),...]} is a function taking a pair of data and returning a list of pairs of new4 keys paired with values, and is applied in parallel to all input data.\footnote{\href{https://en.wikipedia.org/wiki/MapReduce}{wikipedia.org/MapReduce}}
    \item \textbf{Shuffling} - Shuffling consists in flattening the list of values \lstinline{[(k,v2), (k,v3), (k,v4), ...]} paired with a key \texttt{k} to get a pair like \lstinline|(k,[v2,v3,v4,...])|, preparing it for the reduce. In other words, shuffling's purpose is to distributed the key,value pairs towards reducers nodes, possibly evenly. 
    \item \textbf{Reducing} - \lstinline|reduce(k2,[v2,...]) -> [(k3,v3),...]| is a function taking a key and the related list of values and returns ---typically one or none--- pairs of keys and values. 
    \item Producing the result
 \end{enumerate}}
 
-The idea was to develop an implementation of MapReduce allowing to dynamically assign to some generic worker nodes arbitrary ``pipelines'', intended as the \lstinline|map| and \lstinline|reduce| implementations for a given input data stream.\\
+The idea was to develop an implementation of MapReduce allowing to dynamically assign to some generic worker nodes arbitrary \textit{``pipelines''}, intended as the \lstinline|map| and \lstinline|reduce| implementations for a given input data stream.\\
 This means means that the actual \lstinline|map| and \lstinline|reduce| functions are not hardcoded in the workers, but are instead defined by the user in a \texttt{source} node, which is responsible for gathering input data and defining the related pipelines.
 Every worker simply knows its role in the architecture.
 
@@ -53,15 +53,14 @@ This led the application to consist of the following five types(/roles) of nodes
    \texttt{source} nodes are the ones to be \ul{defined by the user}, which have to obey to some rules, but allow for freedom for what concerns the actual MapReduce pipeline
    \item \texttt{dispatcher} - receives data records from the source and distributes them towards mappers.
    \item \texttt{worker} - this implements either a \texttt{mapper}, a \texttt{shuffler} or a \texttt{reducer}. The shuffling phase could also be performed as part of a \texttt{reducer} node, possibly by also improving performance and reducing message overhead, but it was kept separated for ``separation of concerns'' and allow to eventually establish more advanced load-balancing techniques for distributing records amongst reducer nodes.
-   \item \texttt{sink} - receives the results by the \texttt{reduce} and outputs them to disk, or whatever. As \texttt{source} nodes, this may be customized to suit the user's needs.
-   
-   \note{Clearly the project includes basic implementations of the \texttt{source} and \texttt{sink nodes}. }
+   \item \texttt{sink} - receives the results by the \texttt{reduce} and outputs them to disk, to a socket, or whatever. As \texttt{source} nodes, this may be customized to suit the user's needs.
+   \note{Clearly, the project includes basic implementations of \texttt{source} and \texttt{sink} nodes. }
 \end{enumerate}
 
 \subsection{Message Passing}
 \ul{The exchange of messages between the nodes is managed by a \textbf{kafka broker}}. 
 Despite being the de-facto standard for distributed message passing, Kafka is \textit{not} properly suited for big data streams or high-throughput applications.\\
-It is not perfect from a performance point of view, also because the broker acts as both a single point-of-failure and a bottleneck, but nevertheless it was chosen because its concepts of topics and partitions nicely fit some of the communication requirements (and potential issues to solve) of the framework, and because ----based on how it was presented in the lectures--- it seemed an interesting tool to delve into and to learn.
+It is not perfect from a performance point of view, also because the broker acts as both a single point-of-failure and a bottleneck, nevertheless it was chosen because its concepts of topics and partitions nicely fit some of the communication requirements (and potential issues to solve) of the framework, and because ---based on how it was presented in the lectures--- it seemed an interesting tool to delve into and to learn.
 
 {The initial, simpler and most intuitive Kafka topics architecture foresaw the following topics:\ns
 \begin{itemize}
@@ -82,7 +81,8 @@ Hence, \ul{we can dynamically add workers to the pool to scale our application, 
       messages: [{
          key: resKey,
          value: JSON.stringify(newMessageValue(resData, pipelineID)),
-         // partition: index 
+         // partition: index
+         // 'partition' is not set, so that it is automatically computed based on resKey 
       }],
    });
 \end{lstlisting}
@@ -93,16 +93,17 @@ In this way, multiple data streams may be processed simultaneously with differen
 
 \section{Dynamic Topic Creation architecture}
 \subsection{Kafka message retransmission}
-Kafka consumers have an automatic way of handling lost messages. Messages which have not been committed, after some time, are retransmitted by the broker. Hence, in case a worker fails, someone else will resume the work it had left undone, based on the latest \texttt{offSet} available for a given partition, which is increased when committing messages (automatically perfomed by Kafka consumers).
+Kafka consumers have an automatic way of handling lost messages. Messages which have not been \textbf{committed}, after some time, are \textbf{retransmitted} by the broker. Hence, in case a worker fails, someone else will resume the work it had left undone, based on the latest \texttt{offSet} available for a given partition, which is increased when committing messages (automatically perfomed by Kafka consumers).
 
 \subsection{Issues for lost messages}
-Each pipeline defined in a \texttt{source} node is encoded in a \lstinline|PipelineConfig| object, serialized as a string and later parsed in the workers.\\ 
+Each pipeline (a tuple $\langle \texttt{PipelineID}, \texttt{map}, \texttt{reduce}, \texttt{keySelector}, \texttt{dataSelector} \rangle$) defined in a \texttt{source} node is encoded in a \lstinline|PipelineConfig| object, serialized as a string and later parsed in the workers.\\ 
 Since pipeline updates are produced by \texttt{source} nodes and consumed by \texttt{worker}s in a dedicated topic (\lstinline|PIPELINES_UPDATE_TOPIC|), it may happen that the \lstinline|PipelineConfig| object for a pipeline \lstinline|P1| is not yet available when a \textit{data message} (to be processed by either a \texttt{mapper} or a \texttt{reducer}) related to \lstinline|P1| is received, forcing the worker to add the message to a queue of ``not-yet-ready-to-be-processed'' messages.\\
 This is necessary because the worker needs to know the \lstinline|map| and \lstinline|reduce| functions in order to process a data record, which are defined in the \lstinline|PipelineConfig| object;
 so, in case the latter is not available, the worker cannot process the message and has to wait for it to be received.
 
 If in this scenario the worker crashes for some reason, \ul{its messages pending to be processed are lost with it}.
-They cannot simply get retransmitted by the Kafka Broker, because in the meantime some other messages related to ``ready'' pipelines \lstinline|Pi != P1| would make the offset progress.
+They cannot simply get retransmitted by the Kafka Broker, because in the meantime some other messages related to ``ready'' pipelines $P_i \neq P_1$ would make the offset of the \lstinline|MAP_TOPIC| or \lstinline|REDUCE_TOPIC |progress.
+So even manually handling the offset is not a viable solution.
 
 \note{Instinctively it may seem appropriate to halt the worker until the \lstinline|PipelineConfig| object is available, to allow Kafka's retransmission system to work, but ---in case the \lstinline|PipelineConfig| is never received, or it is received after a long time--- this would lead to a performance drop, since the worker would not be able to process any other messages while waiting for the \lstinline|PipelineConfig| object.}
 
@@ -110,6 +111,7 @@ They cannot simply get retransmitted by the Kafka Broker, because in the meantim
 
 \subsection{Dynamic topics}
 \ul{This solution is implemented in the \texttt{multi-topic} branch of the repo}.
+\note{Both approaches were kept in the code on different branches given that both of them have their flaws and advantages.}
 
 The \texttt{dispatcher} node, upon the receival of a new pipeline from a \ul{source}, creates two topics specific for it:
 \begin{lstlisting}
@@ -147,8 +149,15 @@ however, \ul{this comes at the cost of losing the benefits of dedicating a topic
 
 
 
+\newpage
 \section{Partitioning and Scalability}
 \subsection{BSP model}
+\begin{figure}[htbp]
+   \centering
+   \includegraphics{images/bspmodel.png}
+   \caption{BSP Model schema}
+   \label{fig:bspmodel}
+\end{figure}
 BSP model is a way of thinking about distributed applications, which consists in dividing the application into \textit{supersteps}, where each superstep consists of a sequence of operations which are performed in parallel by the workers, followed by a synchronization phase where all the workers wait for each other to finish their superstep before proceeding to the next one.\\
 In our case, the synchronization happens at the end of \textit{map} records. The keys for a given pipeline can be sent to the \texttt{reduce} only after all the \textit{map}s for that pipeline have been completed.
 \framedt{Shuffling}{
@@ -166,10 +175,12 @@ In our case, the synchronization happens at the end of \textit{map} records. The
 }
 The \texttt{sink} nodes instead, can simply start consuming messages from the \texttt{reduce} topic as soon as they are available, without waiting for all the \texttt{reduce}s to finish.
 
+\subsection{Implementation Key Points}
+
 There are some key points concerning our implementation which we have to highlight:
 \begin{itemize}
    \item There must be a special message to signal the end of \textit{source} records, so that the \textit{dispatcher} node knows when the data stream has ended.
-   \item The dispatcher has to propagate the end of the stream to all the \textit{map} nodes, so that they know when to propagate the end of the stream message to the \textit{shuffle} nodes.
+   \item The dispatcher has to propagate the end of the source data stream to all the \textit{map} nodes, so that they know when to propagate the end of the stream message to the \textit{shuffle} nodes.
    \item There must be special messages to signal the end of \textit{map} records, so that the \textit{shuffle} nodes know when they can start feeding the reduce nodes.
    \item The special messages will have a special key and a special value.
    \item Topics are divided into partitions, which are the basic unit of parallelism in Kafka. Each partition is consumed by a single worker, but a single worker can consume multiple partitions.
@@ -190,11 +201,11 @@ The end of the stream is signaled by a special message with a special key and va
 \end{lstlisting}
  
 The dispatcher will then forward this message to all the \textit{map} nodes, which will then propagate it to the \textit{shuffle} nodes, which will then propagate it to the \textit{reduce} nodes, and finally to the \texttt{sink} nodes.\\
-However, there is a major problem which must be addressed and discussed, before talking about the solution. A message with this key \lstinline|`${pipelineID}__${STREAM_ENDED_KEY}`|, will only be received by exactly one map consumer, so there must be some way to either propagate or distribute it among the consumers.
+However, \ul{there is a major problem which must be addressed} and discussed, before talking about the solution. \ul{A message with this key} \lstinline|`${pipelineID}__${STREAM_ENDED_KEY}`|, \ul{will only be received by \textit{exactly one} map consumer}, so there must be some way to either propagate or distribute it among the consumers.
 
 \subsubsection{Partitions for message propagation}
-It is crucial for a proper distributed and scalable architecture to allow adding and removing workers, so the propagation cannot rely on workers knowing each other.\\
-To solve this we can use a fixed explicit number of partitions per topic, such as 10. This will represent the maximum number of workers that can consume messages from a topic at the same time, so having more workers than partitions will not lead to performance improvements.
+It is crucial for a proper distributed and scalable architecture to allow adding and removing workers, so the propagation \textit{cannot} rely on workers knowing each other.\\
+To solve this we can use a \textbf{fixed} explicit number of partitions per topic, such as 10. This will represent the maximum number of workers that can consume messages from a topic at the same time, so having more workers than partitions will not lead to performance improvements.
 This will be one of the few data structures shared among nodes.
 \note{The number of partitions can be adjusted by the user to fit the needs of the application.} 
 
@@ -215,7 +226,7 @@ We can send the message to all the partitions of the topic as depicted in \ref{l
 
 \subsubsection{Message ordering}
 It is important to note that Kafka guarantees message ordering only within a partition, not across partitions.
-This here lies the reason why we can't have a mapper receiving the \textit{end of stream} message to propagate it to other mappers. It may happen that the propagated end message is received by a mapper before other remaining source records, which would lead to the mapper not processing them, and hence losing some data.\\
+Here lies the reason why we can't have a mapper receiving the \textit{end of stream} message to propagate it to other mappers. It may happen that the propagated end message is received by a mapper before other remaining source records, which would lead to the mapper not processing them, and hence losing some data.\\
 Hence, we must send a \lstinline|STREAM_ENDED| for each MAP partition from the dispatcher after it has sent all the source records.
 In this way, we are sure that the in each partition, the \lstinline|STREAM_ENDED| message is received after all the source records.
 
@@ -241,7 +252,7 @@ In case the counter is equal to the number of mappers, then the mapper can propa
 This is displayed in Lst.\ref{lst:streamEndedMapper}.
 
 
-\begin{lstlisting}[label={lst:streamEndedMapper}, caption={Handling the STREAM\_ENDED message in a mapper}]
+\begin{lstlisting}[label={lst:streamEndedMapper}, caption={Handling the STREAM\_ENDED message in a mapper},captionpos={top}]
    // Increment the counter for the number of ended messages
    await redis.incr(`${pipelineID}-MAP-ENDED-counter`);
    
@@ -281,7 +292,7 @@ The shufflers nodes exploit a similar logic for \lstinline|STREAM_ENDED| message
 They handle standard map records by grouping them by key, but in case a \lstinline|STREAM_ENDED| message is received, they increment a counter in redis, and if it's still below \lstinline|BUCKET_SIZE| threshold they do nothing and return.
 The shuffler receiving the last \lstinline|STREAM_ENDED| message, sets a redis flag, signaling that the shuffling phase is over, and sends another \lstinline|STREAM_ENDED| message to all \textit{shuffle} partitions to ``wake'' the shufflers, and have them start sending the \textit{shuffle} records to the \textit{reduce} topic.
 
-\begin{lstlisting}
+\begin{lstlisting}[label={lst:streamEndedShuffler}, caption={Handling the STREAM\_ENDED message in a shuffler},captionpos={top}]
    // Increment the counter for the number of ended messages
    if (!await redis.get(`${pipelineID}-SHUFFLE-READY-flag`)) {
       await redis.incr(`${pipelineID}-SHUFFLE-ENDED-counter`);
@@ -314,6 +325,7 @@ The shuffler receiving the last \lstinline|STREAM_ENDED| message, sets a redis f
       // Send to REDUCE_TOPIC the shuffle records
 \end{lstlisting}
 
+\newpage
 \begin{figure}[htbp]
    \centering
    \includegraphics[width=\columnwidth]{images/redisSynch.png}
@@ -326,9 +338,16 @@ The reducer nodes, will simply perform the reduce operation on the \textit{shuff
 No \lstinline|STREAM_ENDED| is needed no more.
 
 \framedt{Making the sinks know when the stream has ended}{
-   Making sink nodes know when the stream has ended would require the same messy logic as above. Given that the sink nodes are not meant to be used for further processing, but only for outputting the results, and that ideally they should be ``user-defined'', i preferred to let things be simpler.  
+   Making sink nodes know when the stream has ended would require the same ``messy'' logic as above. Given that the sink nodes are not meant to be used for further processing, but only for outputting the results, and that ideally they should be ``user-defined'', i preferred to let things be simpler.  
 }
 
-% \section{Funzionamento}
+\section{Conclusions}
 
-% Riassumiamo il comportamento dell'infrastruttura sviluppata.
+Throughout the development it has been interesting dealing with the issues discussed earlier, especially the \textbf{synchronization} among nodes. Kafka's design allowed to naturally avoid handling access to critical code sections or shared data, but still some synchronization mechanism over the \textsc{MapReduce} phases was needed, as the overall process essentially matches the \textsc{BSP} model.\\
+The major problem which may arise with this kind of systems seems to be the message passing and synchronization handling while keeping scalability and isolation among nodes.\\
+An enhancement in the computation performance of a single operation may be neglectable or ineffective if not supported by an efficient and robust way to communicate the result of such operation.
+In this basic implementation the Kafka broker acts as the main bottleneck, given that it has to handle all the messages; for very basic operations (such as word counting), the overhead introduced by the Kafka message passing, even if it explots batching, may be more relevant than the processing itself.
+
+A posteriori, an architecture similar to adopted one, may better suit node clusters which do not have to work as ``sequentially'' as it happens in the \textsc{MapReduce} framework, and where the information exchanged among them is less, and does enforce a strict process ordering, to avoid waiting for synchronization and better exploiting Kafka's design.
+
+The aim of the project was to pose some challenges, whose resolution has in fact led me to have a deeper understanding of Kafka, MapReduce, TypeScript ---which I had never use before---, and other notions such as Synchronization and Scalability. 
