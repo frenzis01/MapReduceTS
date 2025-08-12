@@ -1,17 +1,16 @@
 \chapter{Introduction}
 \lstset{language=javascript}
 
+This is the report of the project developed for the ``Scalable and Distributed Computing'' course held at UniPi during the academic year 2024/25 by Prof. Dazzi.
+The developed project consists of an implementation in TypeScript of the MapReduce framework, exploiting Kafka for message delivery and Docker for deployment.
+The purpose was \textit{not} to develop a highly performant or resilient implementation of MapReduce; we have discussed other implementations such as Hadoop and Spark, which work well and certainly would not be outperformed by a small project developed by a university student \smiley. \\
+Instead, the intent was to define a problem whose resolution would lead to facing, from a practical point of view, some of the issues and concepts ---highlighted during lectures--- which arise when dealing with distributed applications.
 
-This is the report of the project developed for the ``Scalable and Distributed Computing'' held at UniPi during the academic year 2024/25 by Prof. Dazzi.
-The developed project consists of a implementation in TypeScript of the MapReduce framework exploiting Kafka for message delivery and Docker for the deployment.
-The purpose was \textit{not} to develop a highly-performant resilient implementation of MapReduce, we have discussed other implementations such as Hadoop and Spark which work fine and surely won't be outperformed by a small project developed by a university student \smiley. \\
-The intent was instead to define a problem whose resolution would led to face, from a practical point of view, some of the issues and concepts ---highlighted during lectures---6 which arise when dealing with distributed applications.
-
-This report will initially describe the main features and architecture of the implementation, to later discuss how it works under the hood and how it relates to the concepts discussed in the course.
+This report will initially describe the main features and architecture of the implementation, and later discuss how it works under the hood and how it relates to the concepts discussed in the course.
 
 \nl
 
-{The course topics this projects touches are:\ns
+{The course topics this project touches are:\ns
 \begin{itemize}
    \item MapReduce
    \item Kafka and Distributed Messaging
@@ -33,14 +32,14 @@ This report will initially describe the main features and architecture of the im
 {MapReduce, as we have discussed it, during the lectures, includes the steps depicted in Fig. \ref{fig:mapreduce}, i.e.:\ns
 \begin{enumerate}
    \item Input/Splitting
-   \item \textbf{Mapping} - \lstinline{map(k1,v1) -> [(k2,v2),...]} is a function taking a pair of data and returning a list of pairs of new4 keys paired with values, and is applied in parallel to all input data.\footnote{\href{https://en.wikipedia.org/wiki/MapReduce}{wikipedia.org/MapReduce}}
-   \item \textbf{Shuffling} - Shuffling consists in flattening the list of values \lstinline{[(k,v2), (k,v3), (k,v4), ...]} paired with a key \texttt{k} to get a pair like \lstinline|(k,[v2,v3,v4,...])|, preparing it for the reduce. In other words, shuffling's purpose is to distributed the key,value pairs towards reducers nodes, possibly evenly. 
-   \item \textbf{Reducing} - \lstinline|reduce(k2,[v2,...]) -> [(k3,v3),...]| is a function taking a key and the related list of values and returns ---typically one or none--- pairs of keys and values. 
+   \item \textbf{Mapping} - \lstinline{map(k1,v1) -> [(k2,v2),...]} is a function that takes a pair of data and returns a list of pairs of new keys paired with values, and is applied in parallel to all input data.\footnote{\href{https://en.wikipedia.org/wiki/MapReduce}{wikipedia.org/MapReduce}}
+   \item \textbf{Shuffling} - Shuffling consists of flattening the list of values \lstinline{[(k,v2), (k,v3), (k,v4), ...]} paired with a key \texttt{k} to get a pair like \lstinline|(k,[v2,v3,v4,...])|, preparing it for the reduce phase. In other words, shuffling's purpose is to distribute the key-value pairs towards reducer nodes, possibly evenly. 
+   \item \textbf{Reducing} - \lstinline|reduce(k2,[v2,...]) -> [(k3,v3),...]| is a function that takes a key and the related list of values and returns ---typically one or none--- pairs of keys and values. 
    \item Producing the result
 \end{enumerate}}
 
-The idea was to develop an implementation of MapReduce allowing to dynamically assign to some generic worker nodes arbitrary \textit{``pipelines''}, intended as the \lstinline|map| and \lstinline|reduce| implementations for a given input data stream.\\
-This means means that the actual \lstinline|map| and \lstinline|reduce| functions are not hardcoded in the workers, but are instead defined by the user in a \texttt{source} node, which is responsible for gathering input data and defining the related pipelines.
+The idea was to develop an implementation of MapReduce allowing the dynamic assignment of arbitrary \textit{``pipelines''} to generic worker nodes, intended as the \lstinline|map| and \lstinline|reduce| implementations for a given input data stream.\\
+This means that the actual \lstinline|map| and \lstinline|reduce| functions are not hardcoded in the workers, but are instead defined by the user in a \texttt{source} node, which is responsible for gathering input data and defining the related pipelines.
 Every worker simply knows its role in the architecture.
 
 \section{Architecture}
@@ -48,17 +47,17 @@ Every worker simply knows its role in the architecture.
 \subsection{Nodes}
 This led the application to consist of the following five types(/roles) of nodes:
 \begin{enumerate}
-   \item \texttt{source} - responsible for \ul{gathering input data} (from disk or whatever) and \ul{defining the related \texttt{map} and \texttt{reduce} functions} (the \textit{``pipeline''}, as it is referred to in the code), along with functions for selecting the key and the value from a data object, whose type and structure would be unknown for a worker.\\
+   \item \texttt{source} - responsible for \ul{gathering input data} (from disk or elsewhere) and \ul{defining the related \texttt{map} and \texttt{reduce} functions} (the \textit{``pipeline''}, as it is referred to in the code), along with functions for selecting the key and the value from a data object, whose type and structure would be unknown to a worker.\\
    \texttt{source} nodes ignore the underlying architecture of the MapReduce framework, \ul{they simply announce pipelines and send data records to a \texttt{dispatcher}}.\\
-   \texttt{source} nodes are the ones to be \ul{defined by the user}, which have to obey to some rules, but allow for freedom for what concerns the actual MapReduce pipeline
-   \item \texttt{dispatcher} - receives data records from the source and distributes them towards mappers.
-   \item \texttt{worker} - this implements either a \texttt{mapper}, a \texttt{shuffler} or a \texttt{reducer}. The shuffling phase could also be performed as part of a \texttt{reducer} node, possibly by also improving performance and reducing message overhead, but it was kept separated for ``separation of concerns'' and allow to eventually establish more advanced load-balancing techniques for distributing records amongst reducer nodes.
-   \item \texttt{sink} - receives the results by the \texttt{reduce} and outputs them to disk, to a socket, or whatever. As \texttt{source} nodes, this may be customized to suit the user's needs.
+   \texttt{source} nodes are the ones to be \ul{defined by the user}, which have to obey some rules, but allow freedom regarding the actual MapReduce pipeline.
+   \item \texttt{dispatcher} - receives data records from the source and distributes them to mappers.
+   \item \texttt{worker} - this implements either a \texttt{mapper}, a \texttt{shuffler} or a \texttt{reducer}. The shuffling phase could also be performed as part of a \texttt{reducer} node, possibly improving performance and reducing message overhead, but it was kept separate for ``separation of concerns'' and to allow for more advanced load-balancing techniques for distributing records among reducer nodes.
+   \item \texttt{sink} - receives the results from the \texttt{reduce} and outputs them to disk, to a socket, or elsewhere. As with \texttt{source} nodes, this may be customized to suit the user's needs.
    \note{Clearly, the project includes basic implementations of \texttt{source} and \texttt{sink} nodes. }
 \end{enumerate}
 
 \subsection{Message Passing}
-\ul{The exchange of messages between the nodes is managed by a \textbf{kafka broker}}. 
+\ul{The exchange of messages between the nodes is managed by a \textbf{Kafka broker}}. 
 Despite being the de-facto standard for distributed message passing, Kafka is \textit{not} properly suited for big data streams or high-throughput applications.\\
 It is not perfect from a performance point of view, also because the broker acts as both a single point-of-failure and a bottleneck, nevertheless it was chosen because its concepts of topics and partitions nicely fit some of the communication requirements (and potential issues to solve) of the framework, and because ---based on how it was presented in the lectures--- it seemed an interesting tool to delve into and to learn.
 
@@ -72,8 +71,8 @@ It is not perfect from a performance point of view, also because the broker acts
    \item \lstinline|PIPELINES_UPDATE_TOPIC| - Used for announcing new pipelines, allowing workers to get the \lstinline|map| and \lstinline|reduce| functions to execute.
 \end{itemize}}
 
-The functioning of Kafka topics and groups naturally allows for multiple workers belonging to a single \lstinline|'map-group'| to subcribe to \lstinline|'MAP_TOPIC'| and simultaneously consume messages from it; clearly, the same applies for all the other topics. 
-Hence, \ul{we can dynamically add workers to the pool to scale our application, and the kafka broker will automatically handle the distribution of messages among them}.
+The functioning of Kafka topics and groups naturally allows for multiple workers belonging to a single \lstinline|'map-group'| to subscribe to \lstinline|'MAP_TOPIC'| and simultaneously consume messages from it; clearly, the same applies for all the other topics. 
+Hence, \ul{we can dynamically add workers to the pool to scale our application, and the Kafka broker will automatically handle the distribution of messages among them}.
 
 \begin{lstlisting}[caption={Sending MAP record to shuffle topic},label={lst:sendingMapRecord}]
    await producer.send({
@@ -86,14 +85,14 @@ Hence, \ul{we can dynamically add workers to the pool to scale our application, 
       }],
    });
 \end{lstlisting}
-Encoding the \lstinline|pipelineID| in the \lstinline|value| field allows to distinguish the pipeline to which the data belongs; equivalently we could also add a prefix in the \texttt{key} field of a Kafka message, something like \lstinline|key: `${pipelineID}__map-record__{resKey}`|.\\
+Encoding the \lstinline|pipelineID| in the \lstinline|value| field allows us to distinguish the pipeline to which the data belongs; equivalently, we could also add a prefix in the \texttt{key} field of a Kafka message, something like \lstinline|key: `${pipelineID}__map-record__{resKey}`|.\\
 In this way, multiple data streams may be processed simultaneously with different \lstinline|map| and \lstinline|reduce| functions for each of them.
 
 % // TODO non ricordo cosa intendessi qui sopra riguardo la key. Dovrei anche scrivere cosa è resKey
 
 \section{Dynamic Topic Creation architecture}
 \subsection{Kafka message retransmission}
-Kafka consumers have an automatic way of handling lost messages. Messages which have not been \textbf{committed}, after some time, are \textbf{retransmitted} by the broker. Hence, in case a worker fails, someone else will resume the work it had left undone, based on the latest \texttt{offSet} available for a given partition, which is increased when committing messages (automatically perfomed by Kafka consumers).
+Kafka consumers have an automatic way of handling lost messages. Messages which have not been \textbf{committed}, after some time, are \textbf{retransmitted} by the broker. Hence, in case a worker fails, someone else will resume the work it had left undone, based on the latest \texttt{offset} available for a given partition, which is increased when committing messages (automatically performed by Kafka consumers).
 
 \subsection{Issues for lost messages}
 Each pipeline (a tuple $\langle \texttt{PipelineID}, \texttt{map}, \texttt{reduce}, \texttt{keySelector}, \texttt{dataSelector} \rangle$) defined in a \texttt{source} node is encoded in a \lstinline|PipelineConfig| object, serialized as a string and later parsed in the workers.\\ 
@@ -102,31 +101,31 @@ This is necessary because the worker needs to know the \lstinline|map| and \lsti
 so, in case the latter is not available, the worker cannot process the message and has to wait for it to be received.
 
 If in this scenario the worker crashes for some reason, \ul{its messages pending to be processed are lost with it}.
-They cannot simply get retransmitted by the Kafka Broker, because in the meantime some other messages related to ``ready'' pipelines $P_i \neq P_1$ would make the offset of the \lstinline|MAP_TOPIC| or \lstinline|REDUCE_TOPIC |progress.
+They cannot simply get retransmitted by the Kafka Broker, because in the meantime some other messages related to ``ready'' pipelines $P_i \neq P_1$ would make the offset of the \lstinline|MAP_TOPIC| or \lstinline|REDUCE_TOPIC| progress.
 So even manually handling the offset is not a viable solution.
 
 \note{Instinctively it may seem appropriate to halt the worker until the \lstinline|PipelineConfig| object is available, to allow Kafka's retransmission system to work, but ---in case the \lstinline|PipelineConfig| is never received, or it is received after a long time--- this would lead to a performance drop, since the worker would not be able to process any other messages while waiting for the \lstinline|PipelineConfig| object.}
 
-\ul{This led to the development of an alternative and more intricated architecture for topics}, involving two \textbf{dynamically created topics} (\lstinline|MAP/REDUCE|) for each pipeline \lstinline|Pi|.
+\ul{This led to the development of an alternative and more intricate architecture for topics}, involving two \textbf{dynamically created topics} (\lstinline|MAP/REDUCE|) for each pipeline \lstinline|Pi|.
 
 \subsection{Dynamic topics}
 \ul{This solution is implemented in the \texttt{multi-topic} branch of the repo}.
 \note{Both approaches were kept in the code on different branches given that both of them have their flaws and advantages.}
 
-The \texttt{dispatcher} node, upon the receival of a new pipeline from a \ul{source}, creates two topics specific for it:
+The \texttt{dispatcher} node, upon receiving a new pipeline from a \ul{source}, creates two topics specific for it:
 \begin{lstlisting}
    [  topic: `${MAP_TOPIC}---${pipelineID}`,
       topic: `${REDUCE_TOPIC}---${pipelineID}`  ]
 \end{lstlisting}
 
-For what concerns \texttt{shuffler}s instead, since they do need to compute neither \lstinline|map| or \lstinline|reduce|, we can use a fixed unique \lstinline|`${SHUFFLE_TOPIC}`|, and encode the \lstinline|pipelineID| in the value of a message as displayed in \ref{lst:sendingMapRecord}.\\
+For what concerns \texttt{shuffler}s instead, since they do not need to compute either \lstinline|map| or \lstinline|reduce|, we can use a fixed unique \lstinline|`${SHUFFLE_TOPIC}`|, and encode the \lstinline|pipelineID| in the value of a message as displayed in \ref{lst:sendingMapRecord}.\\
 Recall that \ul{\texttt{shuffler}s only need the \texttt{key} and the \texttt{pipelineID} to perform their job}, and these two are encoded in the \lstinline|key| and \lstinline|value| fields of a Kafka message, respectively. 
 
 \texttt{mapper}s and \texttt{reducer}s have to \ul{subscribe to the topics dynamically created by the \texttt{dispatcher} while consuming other messages}. \\
 This is in general \ul{\textit{not} trivial for Kafka}.\\
 \lstinline|KafkaJS| does \textit{not} allow a consumer to subscribe to a topic while running and consuming messages.
 
-{The only functioning way to make consumers implement this mechanism seems to be to:\ns
+{The only functioning way to make consumers implement this mechanism seems to be:\ns
 \begin{enumerate}
    \item \lstinline|stop()| the consumer 
    \item \lstinline|disconnect()| it from the broker
@@ -136,15 +135,15 @@ This is in general \ul{\textit{not} trivial for Kafka}.\\
 \end{enumerate}}
 \note{Skipping disconnecting and reconnecting caused issues with duplicated messages and other weird behaviours.}
 
-Clearly, every time a worker performs these operations, a \textit{rebalance} is triggered, since the broker has recompute the partitions assignment to consumer of both the newly created topic  and the ones to which consumers had already subscribed,
+Clearly, every time a worker performs these operations, a \textit{rebalance} is triggered, since the broker has to recompute the partition assignment to consumers of both the newly created topic and the ones to which consumers had already subscribed,
 \ul{resulting in the application essentially halting for a few seconds}.
 
-The \textbf{simpler approach} depicted earlier at \ref{enum:simplerTopics} \textbf{avoids this} and follows the more natural way of working for Kafka, where a consumer does not need to decide a runtime to what topics it should be interested in, or at least, decides ``only once'';
+The \textbf{simpler approach} depicted earlier at \ref{enum:simplerTopics} \textbf{avoids this} and follows the more natural way of working for Kafka, where a consumer does not need to decide at runtime to which topics it should be interested in, or at least, decides ``only once'';
 however, \ul{this comes at the cost of losing the benefits of dedicating a topic for each data stream, such as handling lost messages}.
 
 \framedt{CAP theorem recalls}{
    % // TODO verify this 
-   CAP theorem states that we can have at the same time only two properties among \textit{Consistency}, \textit{Availability} and \textit{Network Partitioning}. In fact in our network-partitioned scenario, enforcing consistency leads to periods of unavailability, while guaranteeing (better) availability implies the possibility of ending up in an uncosistent state, with some information lost.
+   CAP theorem states that we can have at the same time only two properties among \textit{Consistency}, \textit{Availability} and \textit{Network Partitioning}. In fact, in our network-partitioned scenario, enforcing consistency leads to periods of unavailability, while guaranteeing (better) availability implies the possibility of ending up in an inconsistent state, with some information lost.
 }
 
 
@@ -350,4 +349,4 @@ In this basic implementation the Kafka broker acts as the main bottleneck, given
 
 A posteriori, an architecture similar to adopted one, may better suit node clusters which do not have to work as ``sequentially'' as it happens in the \textsc{MapReduce} framework, and where the information exchanged among them is less, and does enforce a strict process ordering, to avoid waiting for synchronization and better exploiting Kafka's design.
 
-The aim of the project was to pose some challenges, whose resolution has in fact led me to have a deeper understanding of Kafka, MapReduce, TypeScript ---which I had never use before---, and other notions such as Synchronization and Scalability. 
+The aim of the project was to pose some challenges, whose resolution has in fact led me to have a deeper understanding of Kafka, MapReduce, TypeScript ---which I had never use before---, and other notions such as Synchronization and Scalability.
