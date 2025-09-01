@@ -31,6 +31,13 @@ This report will initially describe the main features and architecture of the im
    The CAP theorem tells us that in a distributed data store, it is impossible to simultaneously guarantee \textbf{consistency}, \textbf{availability}, and \textbf{partition tolerance}. This is relevant to our implementation, as we have to make some trade-offs between these properties when designing the messaging and synchronization architecture.\\
    More specifically, this led to have two slightly different implementations, trading off the properties in different ways. 
 \end{itemize}}
+
+\subsection*{Testing the implementation}
+\begin{lstlisting}[language=bash]
+   git clone git@github.com:frenzis01/MapReduceTS.git
+   cd MapReduceTS
+   docker compose up
+\end{lstlisting}
 \newpage
 
 \section{Abstract}
@@ -124,6 +131,13 @@ Having a topic for each data stream allows for separate message committing, henc
 \subsection{Dynamic topics}
 \ul{This solution is implemented in the \texttt{multi-topic} branch of the repo}.
 \note{Both approaches were kept in the code on different \texttt{git} branches given that both of them have their flaws and advantages.}
+
+\begin{lstlisting}[language=bash, caption={Testing the dynamic topics implementation}]
+   git clone git@github.com:frenzis01/MapReduceTS.git
+   cd MapReduceTS
+   git checkout multi-topic
+   docker compose up
+\end{lstlisting}
 
 The \texttt{dispatcher} node, upon receiving a new pipeline from a \ul{source}, creates two topics specific for it:
 \begin{lstlisting}
