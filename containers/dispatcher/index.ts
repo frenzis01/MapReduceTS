@@ -92,6 +92,7 @@ const createTopic = async () => {
 };
 
 
+let counter = 0;
 // Source mode: Reads files from a folder and sends messages to Kafka
 async function dispatcherMode() {
 
@@ -115,8 +116,11 @@ async function dispatcherMode() {
    await consumer.run({
       eachMessage: async ({ message }) => {
 
+         counter++;
          const { key, val } = unboxKafkaMessage(message);
-         console.log(`[DISPATCHER] Received message ${key}`);
+         if (counter % 1000 == 0){
+            console.log(`[DISPATCHER] Receving messages... Received message ${key}`);
+         }
 
          const pipelineID = getPipelineID(key);
          if (pipelineID === null) return;
@@ -154,7 +158,6 @@ async function dispatcherMode() {
             topic: MAP_TOPIC,
             messages: [{ key: pipelineID + "__source-record__" + index, value: JSON.stringify(newMessageValue(val.data, pipelineID)) }]
          });
-         console.log(`[DISPATCHER] Sent pipeline ${pipelineID} to map`);
       },
    });
 

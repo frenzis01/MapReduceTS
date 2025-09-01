@@ -37,10 +37,12 @@ async function outputMode() {
    await consumer.connect();
    await consumer.subscribe({ topic: OUTPUT_TOPIC, fromBeginning: true });
 
+   let counter = 0;
    console.log("Connected")
    consumer.run({
       eachMessage: async ({ message }: { message: KafkaMessage }) => {
-         console.log(`[${MODE}/${WORKER_ID}]`)
+         counter++;
+         // console.log(`[${MODE}/${WORKER_ID}]`)
          if (!message.value || !message.key) return;
          const key = message.key?.toString();
          const value = JSON.parse(message.value.toString());
@@ -49,7 +51,10 @@ async function outputMode() {
             // Prepend the worker ID to allow multiple sinks to work simultaneously without operating on the same file
             const outputPath = path.join(OUTPUT_FOLDER, `${WORKER_ID}_${value.pipelineID}_result.txt`);
             fs.appendFileSync(outputPath, `${key}: ${value.data}\n`);
-            console.log(`[SINK MODE] Wrote result: ${value.pipelineID}/${key}: ${value.data}`);
+            
+            if (counter % 1000 == 0) {
+               console.log(`[SINK MODE] Wrote ${counter} lines. Now wrote result: ${value.pipelineID}/${key}: ${value.data}`);
+            }
          }
       },
    });
