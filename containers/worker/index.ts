@@ -55,6 +55,9 @@ const redis = createClient({
    url: 'redis://redis:6379' // Redis URL matches the service name in docker-compose
 })
 
+// Counter for received messages
+let counter = 0;
+
 // Map mode: Applies the map function to incoming messages
 async function mapMode() {
 
@@ -68,7 +71,7 @@ async function mapMode() {
       eachMessage: async ({ topic, message }: { topic: any, message: KafkaMessage }) => {
 
          try {
-
+            counter++;
             if (!message.value || !message.key) {
                console.log(`[MAP/${WORKER_ID}] No message value or key found. Skipping...`);
                return;
@@ -118,11 +121,11 @@ async function processMessageMap(message: KafkaMessage, pipelineConfig: Pipeline
 
       // Dispatcher sends one STREAM_ENDED message for each partition, i.e. BUCKET_SIZE times
       // We need to wait for all the STREAM_ENDED messages to arrive before starting to send to shuffle
-      const counter = await redis.get(`${pipelineID}-MAP-ENDED-counter`);
-      if (!counter || Number(counter) !== BUCKET_SIZE) {
+      const streamEndedCounter = await redis.get(`${pipelineID}-MAP-ENDED-counter`);
+      if (!streamEndedCounter || Number(streamEndedCounter) !== BUCKET_SIZE) {
          // In case we have not yet received all the STREAM_ENDED messages, we simply return,
-         // as we are not ready to send to shuffle yet, and we have already incremented the counter
-         console.log(`[MAP/${WORKER_ID}] Received stream ended message. Got ${counter}/${BUCKET_SIZE} messages... for ${pipelineID}`);
+         // as we are not ready to send to shuffle yet, and we have already incremented the streamEndedCounter
+         console.log(`[MAP/${WORKER_ID}] Received stream ended message. Got ${streamEndedCounter}/${BUCKET_SIZE} messages... for ${pipelineID}`);
          return;
       }
       else {
@@ -160,8 +163,8 @@ async function processMessageMap(message: KafkaMessage, pipelineConfig: Pipeline
          const resKey = pipelineConfig.keySelector(result);
          // TODO this shold not be necessary, see below
          // const hashed = bitwiseHash(pipelineConfig.keySelector(result)) % BUCKET_SIZE;
-         if (Math.random() < 0.0001) {
-            console.log(`[MAP/${WORKER_ID}] Mapped: ${resKey} -> ${resData}`);
+         if (counter % 1000 == 0) {
+            console.log(`[MAP/${WORKER_ID}] Mapping records... Mapped: ${resKey} -> ${resData}`);
          }
          await producer.send({
             topic: `${SHUFFLE_TOPIC}`,
@@ -193,7 +196,6 @@ async function shuffleMode() {
    // For each pipelineID, we store the key-value pairs
    const keyValueStore: { [pipelineID: string]: { [key: string]: string[] } } = {};
 
-   let counter = 0;
 
    await consumer.run({
       // partitionsConsumedConcurrently: 3, // Default: 1
@@ -259,8 +261,8 @@ async function shuffleMode() {
                      messages: [{ "key": `${pipelineID}__shuffle-record__${key}`, "value": tmp }],
                   });
 
-                  // print one message every 1000 messages (on average)
-                  if (Math.random() < 0.01) {
+                  // print one message every 1000 messages
+                  if (counter % 1000 == 0) {
                      console.log(`[SHUFFLE/${WORKER_ID}] Currently sending: ${key} -> ${tmp}`);
                   }
 
@@ -275,7 +277,7 @@ async function shuffleMode() {
          }
          keyValueStore[pipelineID][key].push(val.data);
 
-         if (Math.random() < 0.01) {
+         if (counter < 0.001) {
             console.log(`[SHUFFLE/${WORKER_ID}] Received: ${key} -> ${JSON.stringify(val.data)}`);
          }
       }
@@ -291,6 +293,7 @@ async function reduceMode() {
       eachMessage: async ({ message }: { message: KafkaMessage }) => {
          if (!message.key || !message.value) return;
 
+         counter++;
 
          const pipelineID = getPipelineID(message.key.toString());
 
@@ -318,7 +321,7 @@ async function processMessageReduce(message: KafkaMessage, pipelineConfig: Pipel
    // TODO ensure safety
    const word = key.split('__')[2];
    const reducedResult = pipelineConfig.reduceFn(word, val.data);
-   if (Math.random() < 0.0001) {
+   if (counter % 10000 == 0) {
       console.log(`[REDUCE/${WORKER_ID}] Reduced: ${word} -> ${reducedResult}`);
    }
 

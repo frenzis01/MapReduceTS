@@ -106,6 +106,9 @@ async function addPipeline(pipelineID: string, rawValue: any) {
    await new Promise(resolve => setTimeout(resolve, 2000));
 }
 
+// Counter for received messages
+let counter = 0;
+
 // Source mode: Reads files from a folder and sends messages to Kafka
 async function dispatcherMode() {
    const knownPipelines: { [key: string]: boolean } = {};

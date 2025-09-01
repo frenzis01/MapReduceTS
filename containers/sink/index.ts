@@ -30,6 +30,9 @@ const OUTPUT_TOPIC = 'output-topic';
 // Unique worker ID
 const WORKER_ID = `${Math.random().toString(36).substring(2, 15)}`;
 
+// Counter for received messages
+let counter = 0;
+
 
 // SINK mode: Writes reduced results to disk
 async function outputMode() {
@@ -41,6 +44,7 @@ async function outputMode() {
    consumer.run({
       eachMessage: async ({ message }: { message: KafkaMessage }) => {
          if (!message.value || !message.key) return;
+         counter++;
          const key = message.key?.toString();
          const value = JSON.parse(message.value.toString());
 
@@ -48,7 +52,7 @@ async function outputMode() {
             // Prepend the worker ID to allow multiple sinks to work simultaneously without operating on the same file
             const outputPath = path.join(OUTPUT_FOLDER, `${WORKER_ID}_${value.pipelineID}_result.txt`);
             fs.appendFileSync(outputPath, `${key}: ${value.data}\n`);
-            if (Math.random() < 0.01)
+            if (counter % 1000 == 0)
                console.log(`[SINK/${WORKER_ID}] Wrote result: ${value.pipelineID}/${key}: ${value.data}`);
          }
       },
