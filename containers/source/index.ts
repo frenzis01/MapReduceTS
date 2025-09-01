@@ -76,7 +76,11 @@ async function sourceMode() {
          // && filePath.includes('short')
       ) {
          console.log(`[SOURCE MODE] Found new file: ${filePath}`);
-         
+         // if filepath is empty, return. This is a safeguard, should not happen
+         if (!filePath || filePath.trim().length === 0) {
+            console.log('[SOURCE MODE] filePath empty: skip.');
+            return;
+         }
          const pipelineWordCount = createPipelineWordCount(path.basename(filePath));
          console.log(`[SOURCE MODE] Sending pipelineID: ${JSON.stringify(pipelineWordCount.pipelineID)}`);
          await pipelinesProducer.send({
@@ -135,7 +139,7 @@ async function sourceMode() {
                topic: OUTPUT_TOPIC,
                messages: [{
                   key: key,
-                  value: JSON.stringify(newMessageValueShuffled(value, "seq-word-count")),
+                  value: JSON.stringify(newMessageValueShuffled(value, "seq-word-count-"+ path.basename(filePath))),
                }],
             });
          });
