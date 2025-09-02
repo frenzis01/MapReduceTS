@@ -157,7 +157,7 @@ async function sourceMode() {
                topic: OUTPUT_TOPIC,
                messages: [{
                   key: key,
-                  value: JSON.stringify(newMessageValueShuffled(value, "seq-word-count")),
+                  value: JSON.stringify(newMessageValueShuffled(value, "seq-word-count" + path.basename(filePath))),
                }],
             });
          });

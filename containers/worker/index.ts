@@ -122,7 +122,7 @@ async function processMessageMap(message: KafkaMessage, pipelineConfig: Pipeline
       // Dispatcher sends one STREAM_ENDED message for each partition, i.e. BUCKET_SIZE times
       // We need to wait for all the STREAM_ENDED messages to arrive before starting to send to shuffle
       const streamEndedCounter = await redis.get(`${pipelineID}-MAP-ENDED-counter`);
-      if (!streamEndedCounter || Number(streamEndedCounter) !== BUCKET_SIZE) {
+      if (!streamEndedCounter || Number(streamEndedCounter) < BUCKET_SIZE) {
          // In case we have not yet received all the STREAM_ENDED messages, we simply return,
          // as we are not ready to send to shuffle yet, and we have already incremented the streamEndedCounter
          console.log(`[MAP/${WORKER_ID}] Received stream ended message. Got ${streamEndedCounter}/${BUCKET_SIZE} messages... for ${pipelineID}`);
