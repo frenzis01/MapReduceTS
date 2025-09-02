@@ -130,17 +130,19 @@ So even manually handling the offset is not a viable solution.
 Having a topic for each data stream allows for separate message committing, hence \ul{avoiding the issue of lost messages}.
 
 \subsection{Dynamic topics}
-\ul{This solution is implemented in the \texttt{multi-topic} branch of the repo}.
-\note{Both approaches were kept in the code on different \texttt{git} branches given that both of them have their flaws and advantages.}
+\ul{This approach is implemented in the \texttt{multi-topic} branch of the repo}.
+\note{Both approaches were kept in the code on different \texttt{git} branches.}
 
-\begin{lstlisting}[language=bash, caption={Testing the dynamic topics implementation}]
+This implementation is error prone. Error messages are displayed due to rebalancing, which is expected, but something else may happen under the hood which I couldn't figure out, leading to message duplication and other issues.
+Even though the code looked right from a theoretical point of view, in practice something doesn't work out, possibly because the approach tries to stretch out too much Kafka's natural behavior. Nevertheless, I still though that a brief discussion on this implementation could be interesting.  
+
+\begin{lstlisting}[language=bash, caption={Testing the dynamic topics implementation. The execution may halt or display other errors.}]
    git clone git@github.com:frenzis01/MapReduceTS.git
    cd MapReduceTS
    git checkout multi-topic
    docker container prune
    docker compose up
 \end{lstlisting}
-\note{This implementation is error prone. Error messages are displayed due to rebalancing, which is expected, but something else may happen under the hood which I couldn't figure out, leading to message duplication or other issues.}
 
 The \texttt{dispatcher} node, upon receiving a new pipeline from a \ul{source}, creates two topics specific for it:
 \begin{lstlisting}
