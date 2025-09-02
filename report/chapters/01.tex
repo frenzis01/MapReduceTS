@@ -36,6 +36,7 @@ This report will initially describe the main features and architecture of the im
 \begin{lstlisting}[language=bash]
    git clone git@github.com:frenzis01/MapReduceTS.git
    cd MapReduceTS
+   docker container prune
    docker compose up
 \end{lstlisting}
 \newpage
@@ -136,8 +137,10 @@ Having a topic for each data stream allows for separate message committing, henc
    git clone git@github.com:frenzis01/MapReduceTS.git
    cd MapReduceTS
    git checkout multi-topic
+   docker container prune
    docker compose up
 \end{lstlisting}
+\note{This implementation is error prone. Error messages are displayed due to rebalancing, which is expected, but something else may happen under the hood which I couldn't figure out, leading to message duplication or other issues.}
 
 The \texttt{dispatcher} node, upon receiving a new pipeline from a \ul{source}, creates two topics specific for it:
 \begin{lstlisting}
