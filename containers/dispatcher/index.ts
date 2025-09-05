@@ -117,12 +117,12 @@ async function dispatcherMode() {
       eachMessage: async ({ message }) => {
 
          counter++;
-         const { key, val } = unboxKafkaMessage(message);
+         const { kkey, val } = unboxKafkaMessage(message);
          if (counter % 1000 == 0){
-            console.log(`[DISPATCHER] Receving messages... Received message ${key}`);
+            console.log(`[DISPATCHER] Receving messages... Received message ${kkey}`);
          }
 
-         const pipelineID = getPipelineID(key);
+         const pipelineID = getPipelineID(kkey);
          if (pipelineID === null) return;
 
          if (isStreamEnded(message)) {
@@ -141,7 +141,7 @@ async function dispatcherMode() {
          }
 
 
-         const { keyStr } = parseSourceKey(key);
+         const { keyStr } = parseSourceKey(kkey);
          // check if keyStr can be converted to numer
          let k = parseInt(keyStr);
          if (isNaN(k)) {

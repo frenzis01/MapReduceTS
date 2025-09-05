@@ -25,14 +25,14 @@ interface MessageValue {
    data: any;
 }
 
-function unboxKafkaMessage(msg: KafkaMessage) {
+function unboxKafkaMessage(msg: KafkaMessage) : {kkey: string, val: any } {
    // TODO kind of ugly
    // msg.value is not null when stream ends...
    // Perhaps the null I inject is inside msg.value.data, not msg.value
    if (!msg || !msg.value) throw new Error(`[ERROR] Message value is null`);
    // TODO is this default empty string necessary?
-   const key = !msg.key ? "" : "" + msg.key.toString();
-   if (isStreamEnded(msg)) return { key: key, val: JSON.parse(msg.value.toString()) };
+   const kkey = !msg.key ? "" : "" + msg.key.toString();
+   if (isStreamEnded(msg)) return { kkey: kkey, val: JSON.parse(msg.value.toString()) };
    // TODO Why is toString() necessary? If i put raw data when sending i get an error.
    const value = JSON.parse(msg.value.toString());
    const pipelineID = value.pipelineID;
@@ -40,7 +40,7 @@ function unboxKafkaMessage(msg: KafkaMessage) {
    const data = value.data;   // JSON.parse(value.data) should not be necessary
    const type = value.type;
    const val: MessageValue = { pipelineID, type, data }
-   return { key, val }
+   return { kkey, val }
 }
 
 // TODO numberOfMessages is used only by source... which does not exploit this file...
@@ -75,6 +75,7 @@ function isStreamEnded(message: KafkaMessage): boolean {
 interface PipelineConfig {
    pipelineID: string;
    keySelector: (message: any) => string;
+   dataSelector: (message: any) => any;
    mapFn: (value: any) => any[];
    reduceFn: (key: string, values: any[]) => any;
 }
@@ -139,6 +140,7 @@ function stringifyPipeline(pipeline: PipelineConfig): string {
    const tmp = {
       pipelineID: pipeline.pipelineID,
       keySelector: pipeline.keySelector.toString(),
+      dataSelector: pipeline.dataSelector.toString(),
       mapFn: pipeline.mapFn.toString(),
       reduceFn: pipeline.reduceFn.toString(),
    }

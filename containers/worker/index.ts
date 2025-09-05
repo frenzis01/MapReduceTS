@@ -104,6 +104,7 @@ async function listenForPipelineUpdates() {
          pipelines[pipelineConfig.pipelineID] = {
             pipelineID: pipelineConfig.pipelineID,
             keySelector: eval(pipelineConfig.keySelector),
+            dataSelector: eval(pipelineConfig.dataSelector),
             mapFn: eval(pipelineConfig.mapFn),
             reduceFn: eval(pipelineConfig.reduceFn),
          };
@@ -133,7 +134,7 @@ function processUnprocessedMessages(pipelineConfig: PipelineConfig, callback: (m
          console.log(`[ERROR] No message found in unprocessedMessages`);
          return;
       }
-      // console.log(`[MAP MODE] Processing unprocessed message: ${msg.timestamp}`);
+      console.log(`[MAP MODE] Processing unprocessed message: ${msg.timestamp}`);
       callback(msg, pipelines[pipelineID]);
    }
 }
@@ -164,8 +165,9 @@ async function mapMode() {
 
    await producer.connect();
 
-   const admin = await kafka.admin();
-   await admin.connect();
+   // Needed only if using printTopicMetadata
+   // const admin = await kafka.admin();
+   // await admin.connect();
 
    // We are already connected to redis 
    // redis is needed for synchronization purposes
@@ -206,7 +208,8 @@ async function mapMode() {
  * @param pipelineConfig this is here only to enforce that the pipelineConfig is passed in and should be available when processing
  */
 async function processMessageMap(message: KafkaMessage, pipelineConfig: PipelineConfig) {
-   const { key, val } = unboxKafkaMessage(message);
+   const { kkey, val } = unboxKafkaMessage(message);
+   // const key = pipelineConfig.keySelector(val.data);
    // We don't have to wait to propagate it as in shuffle.
    // We can propagate it immediately, and leave the synchronization to the shuffle container
    if (isStreamEnded(message)) {
@@ -248,20 +251,37 @@ async function processMessageMap(message: KafkaMessage, pipelineConfig: Pipeline
    }
 
    const mapResults = pipelineConfig.mapFn(val.data);
-   for (const result of mapResults) {
-      // every thousand messages, we log the progress
-      if (counter % 1000 == 0) {
-         console.log(`[MAP MODE] Processing messages...`);
-      }
 
-      const hashed = bitwiseHash(pipelineConfig.keySelector(result)) % BUCKET_SIZE;
-      await producer.send({
-         topic: SHUFFLE_TOPIC,
-         // items with the same key should go to the same partition, i.e. the same shuffler
-         // consider flattening the keys to avoid too many partitions
-         // TODO hash the key and use the hash and modulo BUCKET_SIZE to get partition
-         messages: [{ key: pipelineConfig.keySelector(result), value: JSON.stringify(newMessageValue(result, pipelineConfig.pipelineID)) }],
-      });
+   // console.log("[MAP MODE] Mapping data... " + mapResults.length  );
+   // console.log(mapResults);
+
+   for (const arr of mapResults) {
+      // console.log("---------Array");
+      // console.log(arr);
+      for (const result of arr) {
+         // console.log("---------Result");
+         // console.log(result);
+         // console.log(pipelineConfig);
+         const key = pipelineConfig.keySelector(result);
+         // console.log("---------Key done");
+         const data = pipelineConfig.dataSelector(result);
+
+         // every thousand messages, we log the progress
+         if (counter % 1000 == 0) {
+         // console.log(`[MAP MODE] Processing messages...`);
+         console.log(`[MAP MODE] Mapping data... Mapped: ${key} -> ${data}`);
+         }
+
+         // TODO use this or not?
+         const hashed = bitwiseHash(key) % BUCKET_SIZE;
+         await producer.send({
+            topic: SHUFFLE_TOPIC,
+            // items with the same key should go to the same partition, i.e. the same shuffler
+            // consider flattening the keys to avoid too many partitions
+            // TODO hash the key and use the hash and modulo BUCKET_SIZE to get partition
+            messages: [{ key: key, value: JSON.stringify(newMessageValue(data, pipelineConfig.pipelineID)) }],
+         });
+      }
    }
 }
 
@@ -315,8 +335,9 @@ async function shuffleMode() {
 
          counter++;
 
-         const { key, val } = unboxKafkaMessage(message);
+         const { kkey, val } = unboxKafkaMessage(message);
          const pipelineID = val.pipelineID;
+         const key = kkey;
 
          if (!pipelineID) return; // Throw error?
 
@@ -421,15 +442,16 @@ async function reduceMode() {
 }
 
 async function processMessageReduce(message: KafkaMessage, pipelineConfig: PipelineConfig) {
-   const { key, val } = unboxKafkaMessage(message);
+   const { kkey, val } = unboxKafkaMessage(message);
 
-   if (key.toString().split('__').length !== 3) {
+   
+   if (kkey.toString().split('__').length !== 3) {
       return;
       // TODO throw error?
    }
    // Trim to get from the second __ till the end, i.e. the word
    // TODO ensure safety
-   const word = key.split('__')[2];
+   const word = kkey.split('__')[2];
    const reducedResult = pipelineConfig.reduceFn(word, val.data);
    
    if (counter % 1000 == 0) {

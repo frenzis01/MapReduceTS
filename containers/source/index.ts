@@ -22,6 +22,7 @@ import {
    DISPATCHER_TOPIC,
    PIPELINE_UPDATE_TOPIC,
    OUTPUT_TOPIC,
+   bitwiseHash
    // @ts-ignore
 } from "./utils";
 // TODO ugly import
@@ -37,21 +38,32 @@ const producer = kafka.producer();
 const INPUT_FOLDER = './input';
 
 // Pipeline implementing the typical word-count example
-const createPipelineWordCount = (name: string): PipelineConfig => ({
-   // TODO if name contains '_', hash name
+const createPipelineWordCount = (name: string): PipelineConfig => {
+   if (name.includes('_')) {
+      name = bitwiseHash(name).toString();
+   };
+   // Add random suffix of 6 chars to avoid conflicts for files with the same name
+   const suffix = Math.random().toString(16).substring(2, 8);
+   name = `${name}${suffix}`
 
-   pipelineID: 'word-count-' + name,
-   keySelector: (message: any) => message.word,
-   mapFn: (value: any) => {
-      // console.log(`[MAP MODE] Mapping type of value: ${typeof value}:${JSON.stringify(value)}`);
-      // Filter is used to avoid having empty strings "" in the array	
-      const words = value.split(/[^a-zA-Z0-9]+/).filter(Boolean);
-      return words.map((word: string) => ({ word, count: 1 }));
-   },
-   reduceFn: (key: string, values: any[]) => {
-      return values.reduce((acc, curr) => acc + curr.count, 0);
-   },
-});
+   return {
+
+      pipelineID: 'word-count-' + name,
+      keySelector: (message: any) => message.word,
+      dataSelector: (message: any) => message.count,
+      mapFn: (value: any) => {
+         // console.log(`[MAP MODE] Mapping type of value: ${typeof value}:${JSON.stringify(value)}`);
+         // Filter is used to avoid having empty strings "" in the array	
+         const words = value.split(/[^a-zA-Z0-9]+/).filter(Boolean);
+         // Return an array with a single element, which is an array of (word, 1)
+         return words.map((word: string) => ([{ word, count: 1 }])); //
+      },
+      reduceFn: (key: string, values: any[]) => {
+         // Reduce takes as input a key and an array of `data` (count)
+         return values.reduce((acc, count) => acc + count, 0);
+      }
+   }
+};
 
 
 // Source mode: Reads files from a folder and sends messages to Kafka
@@ -114,12 +126,15 @@ async function sourceMode() {
 
             // Compute locally and sequentially
             const results = pipelineWordCount.mapFn(record);
-            results.forEach((v: string) => {
-               const key = pipelineWordCount.keySelector(v);
-               if (!shuffled[key]) {
-                  shuffled[key] = [];
-               }
-               shuffled[key].push(v);
+            // [[{word: 'abg', count: 1}], [{word: 'abg', count: 1}], [{word: 'agg', count: 1}]]
+            results.forEach((v: Object[]) => {
+               v.forEach((v) => {
+                  const key = pipelineWordCount.keySelector(v);
+                  if (!shuffled[key]) {
+                     shuffled[key] = [];
+                  }
+                  shuffled[key].push(pipelineWordCount.dataSelector(v));
+               })
 
             });
          });
