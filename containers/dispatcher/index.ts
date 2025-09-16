@@ -96,6 +96,8 @@ let counter = 0;
 // Source mode: Reads files from a folder and sends messages to Kafka
 async function dispatcherMode() {
 
+   const knownPipelines: { [key: string]: boolean } = {};
+   
    // if BUCKET_SIZE is not a positive integer or not provided, exit
    if (isNaN(BUCKET_SIZE) || BUCKET_SIZE <= 0) {
       console.error(`[ERROR] BUCKET_SIZE must be a positive integer`);
@@ -125,6 +127,13 @@ async function dispatcherMode() {
          const pipelineID = getPipelineID(kkey);
          if (pipelineID === null) return;
 
+         if (!knownPipelines[pipelineID]) {
+            knownPipelines[pipelineID] = true;
+            await addPipeline(pipelineID, val);
+            return;
+         }
+         
+
          if (isStreamEnded(message)) {
             // send to all partitions
             for (let i = 0; i < BUCKET_SIZE; i++) {
@@ -153,6 +162,7 @@ async function dispatcherMode() {
          // index is used to compute the partition to send the message to
          const index = k % BUCKET_SIZE;
 
+         console.log("[DISPATCHER] forwarding source records to " + pipelineID);
          // Send message to map
          await producer.send({
             topic: MAP_TOPIC,
@@ -164,6 +174,15 @@ async function dispatcherMode() {
 }
 
 
+async function addPipeline(pipelineID: string, val: any) {
+   await producer.send({
+      topic: PIPELINE_UPDATE_TOPIC,
+      messages: [{
+         key: pipelineID,
+         value: JSON.stringify(val)
+      }]
+   });
+}
 
 
 

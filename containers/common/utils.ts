@@ -62,7 +62,6 @@ function isStreamEnded(message: KafkaMessage): boolean {
    try {
       if (!message.key) return false;
       const tmp = isStreamEndedKey(message.key.toString());
-      if (tmp) console.log(`[STREAM_ENDED] Stream ${message.key.toString().split('__')[0]} ended`);
       return tmp;
    } catch (error) {
       return false;

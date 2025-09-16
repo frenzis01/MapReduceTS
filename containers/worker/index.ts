@@ -100,7 +100,8 @@ async function listenForPipelineUpdates() {
       eachMessage: async ({ message }: { message: KafkaMessage }) => {
          console.log(`[Pipeline Update] [${GROUP_ID}/${WORKER_ID}] received msg with TS ${message.timestamp} | ${message.value}`);
          if (!message.value) return;
-         const pipelineConfig = JSON.parse(message.value.toString());
+         const { kkey, val } = unboxKafkaMessage(message);
+         const pipelineConfig = JSON.parse(val.data.toString());
          pipelines[pipelineConfig.pipelineID] = {
             pipelineID: pipelineConfig.pipelineID,
             keySelector: eval(pipelineConfig.keySelector),
@@ -185,9 +186,11 @@ async function mapMode() {
          }
          
          const pipelineID = getPipelineID(message.key.toString());
+         // console.log(`[${MODE}/${WORKER_ID}] reading 10`)
          if (!pipelineID) return; // Throw error?
+         // console.log(`[${MODE}/${WORKER_ID}] reading 20`)
          const pipelineConfig = pipelines[pipelineID];
-
+         
 
          // TODO need to handle stream_ended_key
          // TODO pause consumer if no pipeline available
@@ -209,11 +212,11 @@ async function mapMode() {
  */
 async function processMessageMap(message: KafkaMessage, pipelineConfig: PipelineConfig) {
    const { kkey, val } = unboxKafkaMessage(message);
+   // console.log(isStreamEnded(message));
    // const key = pipelineConfig.keySelector(val.data);
    // We don't have to wait to propagate it as in shuffle.
    // We can propagate it immediately, and leave the synchronization to the shuffle container
    if (isStreamEnded(message)) {
-
 
       // Increment the counter for the number of ended messages
       await redis.incr(`${pipelineConfig.pipelineID}-MAP-ENDED-counter`);
@@ -250,6 +253,8 @@ async function processMessageMap(message: KafkaMessage, pipelineConfig: Pipeline
       }
    }
 
+   // console.log(pipelineConfig);
+   // console.log(pipelineConfig.mapFn);
    const mapResults = pipelineConfig.mapFn(val.data);
 
    // console.log("[MAP MODE] Mapping data... " + mapResults.length  );
@@ -268,7 +273,7 @@ async function processMessageMap(message: KafkaMessage, pipelineConfig: Pipeline
 
          // every thousand messages, we log the progress
          if (counter % 1000 == 0) {
-         // console.log(`[MAP MODE] Processing messages...`);
+         console.log(`[MAP MODE] Processing messages...`);
          console.log(`[MAP MODE] Mapping data... Mapped: ${key} -> ${data}`);
          }
 
@@ -353,7 +358,7 @@ async function shuffleMode() {
             if (!await redis.get(`${pipelineID}-SHUFFLE-READY-flag`)) {
                await redis.incr(`${pipelineID}-SHUFFLE-ENDED-counter`);
                const streamEndedCounter = await redis.get(`${pipelineID}-SHUFFLE-ENDED-counter`);
-               console.log(`[SHUFFLE MODE] Got ${streamEndedCounter} STREAM_ENDED messages...`);
+               console.log(`[SHUFFLE MODE] Got ${streamEndedCounter}/${BUCKET_SIZE} STREAM_ENDED messages...for ${pipelineID}`);
             }
             // // TODO get bucket size from dispatcher?
             const streamEndedCounter = await redis.get(`${pipelineID}-SHUFFLE-ENDED-counter`);
@@ -423,7 +428,6 @@ async function reduceMode() {
       eachMessage: async ({ message }: { message: KafkaMessage }) => {
          counter++;
          if (!message.key || !message.value) return;
-         // console.log(`[${MODE}/${WORKER_ID}] -> ${(message.key.toString())}`)
 
 
          const pipelineID = getPipelineID(message.key.toString());

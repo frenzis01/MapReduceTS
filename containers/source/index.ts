@@ -94,17 +94,19 @@ async function sourceMode() {
             return;
          }
          const pipelineWordCount = createPipelineWordCount(path.basename(filePath));
-         console.log(`[SOURCE MODE] Sending pipelineID: ${JSON.stringify(pipelineWordCount.pipelineID)}`);
+         const pipelineID = pipelineWordCount.pipelineID;
+         console.log(`[SOURCE MODE] Sending pipelineID: ${JSON.stringify(pipelineID)}`);
          await pipelinesProducer.send({
-            topic: PIPELINE_UPDATE_TOPIC,
-            messages: [{ value: stringifyPipeline(pipelineWordCount) }],
+            topic: DISPATCHER_TOPIC,
+            messages: [{
+               key: pipelineID + "__source-record__0",
+               value: JSON.stringify(newMessageValue(stringifyPipeline(pipelineWordCount),pipelineID))}],
          });
-         console.log(`[SOURCE MODE] Sent pipelineID: ${JSON.stringify(pipelineWordCount.pipelineID)}`);
+         console.log(`[SOURCE MODE] Sent pipelineID: ${JSON.stringify(pipelineID)}`);
 
 
          const fileContent = fs.readFileSync(filePath, 'utf-8');
          const data = fileContent.split('\n')
-         const pipelineID = pipelineWordCount.pipelineID;
 
          let shuffled: { [key: string]: string[] } = {};
 
