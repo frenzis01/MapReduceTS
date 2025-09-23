@@ -162,7 +162,6 @@ async function dispatcherMode() {
          // index is used to compute the partition to send the message to
          const index = k % BUCKET_SIZE;
 
-         console.log("[DISPATCHER] forwarding source records to " + pipelineID);
          // Send message to map
          await producer.send({
             topic: MAP_TOPIC,

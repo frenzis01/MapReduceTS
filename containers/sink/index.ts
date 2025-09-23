@@ -52,7 +52,7 @@ async function outputMode() {
             const outputPath = path.join(OUTPUT_FOLDER, `${WORKER_ID}_${value.pipelineID}_result.txt`);
             fs.appendFileSync(outputPath, `${key}: ${value.data}\n`);
             
-            if (counter % 1000 == 0) {
+            if (counter % 350 == 0) {
                console.log(`[SINK MODE] Wrote ${counter} lines. Now wrote result: ${value.pipelineID}/${key}: ${value.data}`);
             }
          }

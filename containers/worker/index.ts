@@ -98,7 +98,7 @@ async function listenForPipelineUpdates() {
 
    pipelinesConsumer.run({
       eachMessage: async ({ message }: { message: KafkaMessage }) => {
-         console.log(`[Pipeline Update] [${GROUP_ID}/${WORKER_ID}] received msg with TS ${message.timestamp} | ${message.value}`);
+         // console.log(`[Pipeline Update] [${GROUP_ID}/${WORKER_ID}] received msg with TS ${message.timestamp} | ${message.value}`);
          if (!message.value) return;
          const { kkey, val } = unboxKafkaMessage(message);
          const pipelineConfig = JSON.parse(val.data.toString());
@@ -111,8 +111,8 @@ async function listenForPipelineUpdates() {
          };
 
          console.log(`[Pipeline Update] [${GROUP_ID}/${WORKER_ID}] Updated pipeline: ${pipelineConfig.pipelineID}`);
-         console.log(JSON.stringify(Object.keys(unprocessedMessages)));
-         console.log(`${pipelineConfig.pipelineID} | ${!unprocessedMessages[pipelineConfig.pipelineID]}`);
+         // console.log(JSON.stringify(Object.keys(unprocessedMessages)));
+         // console.log(`${pipelineConfig.pipelineID} | ${!unprocessedMessages[pipelineConfig.pipelineID]}`);
          // TODO remove prints
          if (MODE === '--map' && unprocessedMessages[pipelineConfig.pipelineID]) {
             processUnprocessedMessages(pipelineConfig, processMessageMap);
@@ -253,22 +253,12 @@ async function processMessageMap(message: KafkaMessage, pipelineConfig: Pipeline
       }
    }
 
-   // console.log(pipelineConfig);
-   // console.log(pipelineConfig.mapFn);
    const mapResults = pipelineConfig.mapFn(val.data);
 
-   // console.log("[MAP MODE] Mapping data... " + mapResults.length  );
-   // console.log(mapResults);
 
    for (const arr of mapResults) {
-      // console.log("---------Array");
-      // console.log(arr);
       for (const result of arr) {
-         // console.log("---------Result");
-         // console.log(result);
-         // console.log(pipelineConfig);
          const key = pipelineConfig.keySelector(result);
-         // console.log("---------Key done");
          const data = pipelineConfig.dataSelector(result);
 
          // every thousand messages, we log the progress
@@ -353,12 +343,12 @@ async function shuffleMode() {
 
          if (isStreamEnded(message)) {
 
-            console.log(`[SHUFFLE MODE] Received stream ended message for pipeline: ${pipelineID}`);
+            // console.log(`[SHUFFLE MODE] Received stream ended message for pipeline: ${pipelineID}`);
             // TODO improve the logic of these ifs
             if (!await redis.get(`${pipelineID}-SHUFFLE-READY-flag`)) {
                await redis.incr(`${pipelineID}-SHUFFLE-ENDED-counter`);
                const streamEndedCounter = await redis.get(`${pipelineID}-SHUFFLE-ENDED-counter`);
-               console.log(`[SHUFFLE MODE] Got ${streamEndedCounter}/${BUCKET_SIZE} STREAM_ENDED messages...for ${pipelineID}`);
+               console.log(`[SHUFFLE MODE] Got ${streamEndedCounter}/${BUCKET_SIZE} STREAM_ENDED messages... for ${pipelineID}`);
             }
             // // TODO get bucket size from dispatcher?
             const streamEndedCounter = await redis.get(`${pipelineID}-SHUFFLE-ENDED-counter`);
@@ -384,8 +374,9 @@ async function shuffleMode() {
             // Avoid 'else' so that we send stuff after setting the flag
             if (await redis.get(`${pipelineID}-SHUFFLE-READY-flag`)) {
 
-
-               console.log(`[SHUFFLE MODE] [STREAM_ENDED] Sending ${Object.keys(keyValueStore[pipelineID]).length} keys to reduce... from ${counter} messages`);
+               const numKeys = Object.keys(keyValueStore[pipelineID]).length;
+               if (numKeys)
+                  console.log(`[SHUFFLE MODE] [STREAM_ENDED] Sending ${numKeys} keys to reduce... from ${counter} messages`);
 
 
                await Promise.all(Object.keys(keyValueStore[pipelineID]).map(async (key) => {
