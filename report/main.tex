@@ -5,6 +5,24 @@
 
 \lstset{language=JavaScript}
 
+
+\definecolor{mybg}{RGB}{235, 231, 255}
+\definecolor{mytext}{RGB}{24,0,156}
+
+% Configure default style for listing blocks
+\lstset{
+  language=JavaScript
+}
+
+% Save original \verb command and redefine only \verb| syntax
+\let\oldverb\verb
+
+% Redefine \verb to use colorbox with custom styling
+\makeatletter
+\def\verb{\@ifnextchar|{\verb@colored}{\oldverb}}
+\def\verb@colored|#1|{\colorbox{mybg}{\footnotesize\ttfamily\color{mytext}\detokenize{#1}}}
+\makeatother
+
 \title{MapReduce implementation in TypeScript \\Scalable and Distributed Computing Project}
 \author{Francesco Lorenzoni}
 \date{September 2025}
