@@ -33,6 +33,7 @@ This report will initially describe the main features and architecture of the im
 \end{itemize}}
 
 \subsection*{Testing the implementation}
+{\ns
 \begin{lstlisting}[language=bash,literate={&}{{\&}}1]
    git clone git@github.com:frenzis01/MapReduceTS.git
    cd MapReduceTS
@@ -40,6 +41,7 @@ This report will initially describe the main features and architecture of the im
    ./clean_output.sh && docker container prune -f && docker compose up
    # CTRL+C to stop the execution
 \end{lstlisting}
+\note{\footnotesize \texttt{source} nodes also compute the processing sequentially, allowing to compare the distribute MapReduce results with the sequential ones.}}
 \newpage
 
 \section{Abstract}
@@ -52,7 +54,7 @@ This report will initially describe the main features and architecture of the im
 
 {MapReduce, as we have discussed it, during the lectures, includes the steps depicted in Fig. \ref{fig:mapreduce}, i.e.:\ns
 \begin{enumerate} 
-   \item Input/Splitting
+   \item Input/Splitting - Reading from an input source and parsing its content into data records.
    \item \textbf{Mapping} - \verb|map(k1,v1) -> [(k2,v2),...]| is a function that takes a pair of data and returns a list of pairs of new keys paired with values, and is applied in parallel to all input data.\footnote{\href{https://en.wikipedia.org/wiki/MapReduce}{wikipedia.org/MapReduce}}
    \item \textbf{Shuffling} - Shuffling consists of flattening the list of values \verb|[(k,v2), (k,v3), (k,v4), ...]| paired with a key \texttt{k} to get a pair like \verb|(k,[v2,v3,v4,...])|, preparing it for the reduce phase. In other words, shuffling's purpose is to distribute the key-value pairs to reducer nodes, preferably evenly. 
    \item \textbf{Reducing} - \verb|reduce(k2,[v2,...]) -> [(k3,v3),...]| is a function that takes a key and the related list of values and returns ---typically one or none--- pairs of keys and values. 
@@ -66,7 +68,7 @@ Each worker simply knows its role in the architecture.
 \section{Architecture}
 
 \subsection{Nodes}
-This led the application to consist of the following five types(/roles) of nodes:
+{This led the application to consist of the following five types(/roles) of nodes:\ns
 \begin{enumerate}
    \item \texttt{source} - responsible for \ul{gathering input data} (from disk or elsewhere) and \ul{defining the related \texttt{map} and \texttt{reduce} functions} (the \textit{``pipeline''}, as it is referred to in the code), along with functions for selecting the key and the value from a data object, whose type and structure would be unknown to a worker.\\
    \texttt{source} nodes ---mostly--- ignore the underlying architecture of the MapReduce framework, \ul{they simply announce pipelines and send data records to a \texttt{dispatcher}}.\\
@@ -75,21 +77,21 @@ This led the application to consist of the following five types(/roles) of nodes
    \item \texttt{worker} - \ul{this implements either a \texttt{mapper}, a \texttt{shuffler} or a \texttt{reducer}}. The shuffling phase could also be performed as part of a \texttt{reducer} node, possibly improving performance and reducing message overhead, but it was kept separate for ``separation of concerns'' and to allow for possible more advanced load-balancing techniques for distributing records among reducer nodes.
    \item \texttt{sink} - \ul{receives the results} from the \texttt{reduce} and \ul{outputs them to disk}, or elsewhere. As with \texttt{source} nodes, this may be customized to suit the user's needs.
    \note{Clearly, the project includes basic implementations of \texttt{source} and \texttt{sink} nodes. }
-\end{enumerate}
+\end{enumerate}}
 
 \subsection{Message Passing}
 \ul{The exchange of messages between nodes is managed by a \textbf{Kafka broker}}. 
 Despite being the de-facto standard for distributed message passing, Kafka is \textit{not} ideally suited for big data streams or high-throughput applications.\\
 It is not perfect from a performance standpoint, partly because the broker acts as both a single point of failure and a bottleneck. Nevertheless, it was chosen because its concepts of topics and partitions fit well with some of the communication requirements (and potential issues to solve) of the framework, and because ---based on how it was presented in the lectures--- it seemed an interesting tool to explore and learn.
 
-{The initial, simpler and most intuitive Kafka topics architecture foresaw the following topics:\ns
+{The Kafka topics architecture foresaw the following topics:\ns
 \begin{itemize}
    \label{enum:simplerTopics}
    \item \verb|MAP_TOPIC|
    \item \verb|SHUFFLE_TOPIC|
    \item \verb|REDUCE_TOPIC|
    \item \verb|OUTPUT_TOPIC|
-   \item \verb|PIPELINES_UPDATE_TOPIC| - Used for announcing new pipelines, allowing workers to get the \verb|map| and \verb|reduce| functions to execute.
+   \item \verb|PIPELINES_UPDATE_TOPIC| - Used for announcing new pipelines, allowing workers to get the \verb|map| and \verb|reduce| functions to execute on given data records.
 \end{itemize}}
 
 The functioning of Kafka topics and groups naturally allows for multiple workers belonging to a single \verb|'map-group'| to subscribe to \verb|'MAP_TOPIC'| and simultaneously consume messages from it; clearly, the same applies for all the other topics. 
@@ -106,12 +108,12 @@ Hence, \ul{we can dynamically add workers to the pool to scale our application, 
       }],
    });
 \end{lstlisting}
-Encoding the \verb|pipelineID| in the \verb|value| field allows us to distinguish the pipeline to which the data belongs; equivalently, we could also add a prefix in the \verb|key| field of a Kafka message, something like \verb|key: `${pipelineID}__map-record__{resKey}`|.\\
+Encoding the \verb|pipelineID| in the \verb|value| field allows us to distinguish the pipeline to which the data belongs; equivalently, we could also encode it and parse the \verb|key| field of a Kafka message, having something like \\ \verb|key: `${pipelineID}__map-record__{resKey}`|, but it's a less flexible and robust approach.\\
 In this way, \ul{multiple data streams may be processed simultaneously with different} \verb|map| and \verb|reduce| \ul{functions for each of them}.
 
 % // TODO non ricordo cosa intendessi qui sopra riguardo la key. Dovrei anche scrivere cosa è resKey
 
-\section{Dynamic Topic Creation architecture}
+\section{Message retransmission issues}
 \subsection{Kafka message retransmission}
 Kafka consumers have an automatic mechanism for handling lost messages. Messages that have not been \textbf{committed} are \textbf{retransmitted} by the broker after some time. Hence, if a worker fails, another worker will resume the work it had left undone, based on the latest \texttt{offset} available for a given partition, which is incremented when \textit{committing} messages (automatically performed by Kafka consumers).
 
@@ -127,24 +129,16 @@ So even manually handling the offset is not a viable solution.
 
 \note{Instinctively it may seem appropriate to halt the worker until the \verb|PipelineConfig| object is available, to allow Kafka's retransmission system to work, but ---in case the \verb|PipelineConfig| is never received, or it is received after a long time--- this would lead to a performance drop, since the worker would not be able to process any other messages while waiting for the \verb|PipelineConfig| object.}
 
-\ul{This led to the development of an alternative and more intricate architecture for topics}, involving two \textbf{dynamically created topics} (\verb|MAP/REDUCE|) for each pipeline \verb|Pi|.
+For this reason I attempted to develop \ul{an alternative and more intricate architecture for topics}, involving two \textbf{dynamically created topics} (\verb|MAP/REDUCE|) for each pipeline \verb|Pi|.
 Having a topic for each data stream allows for separate message committing, hence \ul{avoiding the issue of lost messages}.
 
 \subsection{Dynamic topics}
-\ul{This approach is implemented in the \texttt{multi-topic} branch of the repo}.
+\note{This approach is implemented in the \texttt{multi-topic} branch of the repo.}
 
 \ul{This implementation is error prone}. Error messages are displayed due to rebalancing, which is expected, but something else happens under the hood which I couldn't figure out, leading to message duplication and other issues.\\
-Even though the code looked correct from a theoretical point of view, in practice something doesn't work out, possibly due to the approach attempting to stretch out too much Kafka's natural behavior. Nevertheless, I still thought that a brief discussion on this implementation could be interesting.  
+Even though the code looked correct from a theoretical point of view, in practice something doesn't work out, possibly due to the approach attempting to stretch out too much Kafka's natural behavior. Nevertheless, I still thought that a brief discussion on the idea behind this implementation could be interesting.  
 
-% \begin{lstlisting}[language=bash, caption={Testing the dynamic topics implementation. The execution may halt or display other errors.},captionpos={top}]
-%    git clone git@github.com:frenzis01/MapReduceTS.git
-%    cd MapReduceTS
-%    git checkout multi-topic
-%    docker container prune
-%    docker compose up
-% \end{lstlisting}
-
-The \texttt{dispatcher} node, upon receiving a new pipeline from a \ul{source}, creates two topics specific for it:
+The \texttt{dispatcher} node, upon receiving a new pipeline from a \texttt{source}, creates two topics specific for it:
 \begin{lstlisting}
    [  topic: `${MAP_TOPIC}---${pipelineID}`,
       topic: `${REDUCE_TOPIC}---${pipelineID}`  ]
@@ -165,13 +159,15 @@ This is in general \ul{\textit{not} trivial for Kafka}.\\
    \item \verb|subscribe({newTopic})| to new topics
    \item \textit{start} (\verb|run(eachMessage: ...)|) consuming messages again
 \end{enumerate}}
-\note{Skipping disconnecting and reconnecting caused issues with duplicated messages and other weird behaviours.}
+\note{Skipping disconnecting and reconnecting caused issues with duplicated messages and other weird behaviours.\\
+This sequence seems instead to accomplish the goal, but not in every scenario.
+}
 
 Clearly, every time a worker performs these operations, a \textit{rebalance} is triggered, since the broker has to recompute the partition assignment to consumers of both the newly created topic and the ones to which consumers had already subscribed,
 \ul{resulting in the application essentially halting for a few seconds}.
 
 The \textbf{simpler approach} depicted earlier at \ref{enum:simplerTopics} \textbf{avoids this} and follows the more natural way of working for Kafka, where a consumer does not need to decide at runtime to which topics it should be interested in, or at least, decides ``only once'';
-however, \ul{this comes at the cost of losing the benefits of dedicating a topic for each data stream, such as handling lost messages}.
+\ul{this comes at the cost of low fault tolerance concerning the handling of lost messages}.
 
 \framedt{CAP theorem reminder}{
    The CAP theorem states that we can simultaneously have only two properties among \textit{Consistency}, \textit{Availability}, and \textit{Network Partitioning}. In our network-partitioned scenario, enforcing consistency leads to periods of unavailability, while guaranteeing (better) availability implies the possibility of ending up in an inconsistent state with some information lost.
@@ -200,7 +196,7 @@ In our case, synchronization occurs at the end of the computation \textit{map} r
 \framedt{Reducing}{
    The \texttt{reducer} nodes can start consuming messages from the \texttt{reduce} topic as soon as they are available, and process them right away.
    This is because the \verb|reduce| operation needs only the list of values for a given key, which is all packed in a single \textit{shuffle} record, and does not depend on the completion of other \textit{reduce} operations.
-   Besides, given that the \texttt{shuffler}s wait for all \verb|map| records to be consumed before sending the \textit{shuffle} records, we can be sure that all the \textit{map}s for a given key have been completed before the \textit{shuffle} record is sent to the \texttt{reduce} topic, so if a shuffle record is received, then we are \textit{sure} that all the \textit{map}s for that key have been completed and are in such \textit{shuffle} record.\\
+   Besides, given that the \texttt{shuffler}s wait for all \textit{map} records to be consumed before sending the \textit{shuffle} records, we can be sure that all the \textit{map}s for a given key have been completed before the \textit{shuffle} record is sent to the \texttt{reduce} topic, so if a shuffle record is received, then we are \textit{sure} that all the \textit{map}s for that key have been completed and are in such \textit{shuffle} record.\\
    Note also that if a \texttt{reducer} receives the \textit{shuffle} record for a key $k_1$, \ul{it is guaranteed by Kafka that it is the only worker handling} $k_1$, so no duplicated processing will happen. 
 }
 The \texttt{sink} nodes instead, can simply start consuming messages from the \verb|OUTPUT_TOPIC| as soon as they are available, without waiting for all the \texttt{reduce} operations to finish.
@@ -260,13 +256,11 @@ We can send the message to all the partitions of the topic as depicted in Lst. \
 It is important to note that \ul{Kafka guarantees message ordering only within a partition}, not across partitions.
 Here lies the reason why we can't have a \texttt{mapper} receiving the \textit{end of stream} message to propagate it to other mappers polling other partitions. It may happen that the propagated end message is received by a \texttt{mapper} before other remaining source records, which would lead to the \texttt{mapper} not processing them, and hence losing some data.\\
 Hence, we must send a \verb|STREAM_ENDED| for each \verb|MAP_TOPIC| partition from the dispatcher after it has sent all the source records.
-In this way, we are sure that the in each partition, the \verb|STREAM_ENDED| message is received after all the source records.
+In this way, we are sure that in each partition the \verb|STREAM_ENDED| message is received after all the source records.
 
 \newpage
 \subsection{Wrap Up}
 Below we have a scheme wrapping up the overall messaging architecture of the application, to display how the messages flow among the nodes.
-% // TODO fix Send Pipeline Configuration also to reducer
-% // Increment MAP-ENDED-counter above Waits for all...
 
 \begin{figure}[htbp]
    \centering
@@ -289,7 +283,7 @@ This is shown in Listing \ref{lst:streamEndedMapper}.
    // Increment the counter for the number of ended messages
    await redis.incr(`${pipelineID}-MAP-ENDED-counter`);
    
-   // Dispatcher sends one STREAM_ENDED message for each partition, i.e. BUCKET_SIZE times
+   // Dispatcher sends one STREAM_ENDED message for each map partition, i.e. BUCKET_SIZE times
    // We need to wait for all the STREAM_ENDED messages to arrive before starting to send to shuffle
    const counter = await redis.get(`${pipelineID}-MAP-ENDED-counter`);
    if (!counter || Number(counter) !== BUCKET_SIZE) {
@@ -326,11 +320,9 @@ They handle standard map records by grouping them by key, but when a \verb|STREA
 The shuffler receiving the last \verb|STREAM_ENDED| message sets a \texttt{redis} flag, signaling that the shuffling phase is over, and sends another \verb|STREAM_ENDED| message to all \textit{shuffle} partitions to ``wake up'' the shufflers and have them start sending the \textit{shuffle} records to the \textit{reduce} topic.
 
 \begin{lstlisting}[label={lst:streamEndedShuffler}, caption={Handling the STREAM\_ENDED message in a shuffler},captionpos={top}]
-   // Increment the counter for the number of ended messages
+   // Increment the counter for the number of STREAM_ENDED messages
    if (!await redis.get(`${pipelineID}-SHUFFLE-READY-flag`)) {
       await redis.incr(`${pipelineID}-SHUFFLE-ENDED-counter`);
-      const streamEndedCounter = await redis.get(`${pipelineID}-SHUFFLE-ENDED-counter`);
-      console.log(`[SHUFFLE/${WORKER_ID}] Got ${streamEndedCounter} STREAM_ENDED messages...`);
    }
    // If we have not yet received all the STREAM_ENDED messages, we simply return
    const streamEndedCounter = await redis.get(`${pipelineID}-SHUFFLE-ENDED-counter`);
