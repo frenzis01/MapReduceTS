@@ -1,15 +1,9 @@
 /**
- * //TODO implement manual offset commit
- *
- * */ 
-
-/**
  * We are suppressing some errors related to installed modules,
  * Since we will run everything in Docker, so no problem with the installed modules.
  *  */
 // @ts-ignore
 import { Kafka, logLevel, KafkaMessage } from 'kafkajs';
-// TODO does KafkaMessage really work?
 
 // @ts-ignore
 import { createClient } from 'redis';
@@ -92,7 +86,6 @@ let pipelines: { [pipelineID: string]: PipelineConfig } = {};
 async function listenForPipelineUpdates() {
    // Use unique worker id so that every consumer in map/shuffle/reduce mode gets the pipeline updates
    const pipelinesConsumer = kafka.consumer({ groupId: WORKER_ID });
-   // TODO actually shuffler doesn't need pipelineConfig updates
    await pipelinesConsumer.connect();
    await pipelinesConsumer.subscribe({ topic: PIPELINE_UPDATE_TOPIC, fromBeginning: true });
 
@@ -128,10 +121,9 @@ async function listenForPipelineUpdates() {
 function processUnprocessedMessages(pipelineConfig: PipelineConfig, callback: (message: KafkaMessage, pipelineConfig: PipelineConfig) => any) {
    const pipelineID = pipelineConfig.pipelineID;
    console.log(`[MAP MODE] Processing unprocessed messages for pipeline: ${pipelineID} | ${unprocessedMessages[pipelineID]?.length}`);
-   // TODO make this async?
    while (unprocessedMessages[pipelineID].length > 0) {
       const msg = unprocessedMessages[pipelineID].shift(); // consume the first item
-      if (!msg) { // TODO should not happen... right? 
+      if (!msg) { // should not happen...
          console.log(`[ERROR] No message found in unprocessedMessages`);
          return;
       }
@@ -143,7 +135,6 @@ function processUnprocessedMessages(pipelineConfig: PipelineConfig, callback: (m
 let unprocessedMessages: { [pipelineID: string]: KafkaMessage[] } = {}; // Queue for messages with missing pipelineConfig
 
 function enqueueUnprocessedMessage(message: KafkaMessage, pipelineID: string) {
-   // TODO pause consumer if no pipeline available
    console.log(`[${WORKER_ID}][ERROR] No pipeline found for ID: ${pipelineID}. Delaying message processing`);
    // Add entry to unprocessedMessages queue if missing
    if (!unprocessedMessages[pipelineID]) {
@@ -152,7 +143,6 @@ function enqueueUnprocessedMessage(message: KafkaMessage, pipelineID: string) {
 
    // Add message to queue
    unprocessedMessages[pipelineID].push(message);
-   // TODO check ordering of push+foreach
 
    return; // Skip processing this message for now
 }
@@ -175,8 +165,7 @@ async function mapMode() {
 
    consumer.run({
       
-      // TODO
-      // partitionsConsumedConcurrently: 3, // Default: 1
+      partitionsConsumedConcurrently: 3, // Default: 1
       eachMessage: async ({ message }: { message: KafkaMessage }) => {
          counter++;
          // console.log(`[${MODE}/${WORKER_ID}] reading 00 ${message.value?.toString()}`)
@@ -192,8 +181,6 @@ async function mapMode() {
          const pipelineConfig = pipelines[pipelineID];
          
 
-         // TODO need to handle stream_ended_key
-         // TODO pause consumer if no pipeline available
          if (!pipelineConfig) {
             enqueueUnprocessedMessage(message, pipelineID);
             return;
@@ -267,13 +254,9 @@ async function processMessageMap(message: KafkaMessage, pipelineConfig: Pipeline
          console.log(`[MAP MODE] Mapping data... Mapped: ${key} -> ${data}`);
          }
 
-         // TODO use this or not?
-         const hashed = bitwiseHash(key) % BUCKET_SIZE;
          await producer.send({
             topic: SHUFFLE_TOPIC,
             // items with the same key should go to the same partition, i.e. the same shuffler
-            // consider flattening the keys to avoid too many partitions
-            // TODO hash the key and use the hash and modulo BUCKET_SIZE to get partition
             messages: [{ key: key, value: JSON.stringify(newMessageValue(data, pipelineConfig.pipelineID)) }],
          });
       }
@@ -324,6 +307,8 @@ async function shuffleMode() {
    const keyValueStore: { [pipelineID: string]: { [key: string]: string[] } } = {};
 
    consumer.run({
+      // This breaks the logic behind synchronizing
+      // partitionsConsumedConcurrently: 3, // Default: 1
       eachMessage: async ({ message }: { message: KafkaMessage }) => {
          // console.log(`[${MODE}/${WORKER_ID}] -> ${!message.key || !message.value} | ${message.key?.toString()} ${message.value?.toString()}`)
          if (!message.key || !message.value) return;
@@ -344,13 +329,11 @@ async function shuffleMode() {
          if (isStreamEnded(message)) {
 
             // console.log(`[SHUFFLE MODE] Received stream ended message for pipeline: ${pipelineID}`);
-            // TODO improve the logic of these ifs
             if (!await redis.get(`${pipelineID}-SHUFFLE-READY-flag`)) {
                await redis.incr(`${pipelineID}-SHUFFLE-ENDED-counter`);
                const streamEndedCounter = await redis.get(`${pipelineID}-SHUFFLE-ENDED-counter`);
                console.log(`[SHUFFLE MODE] Got ${streamEndedCounter}/${BUCKET_SIZE} STREAM_ENDED messages... for ${pipelineID}`);
             }
-            // // TODO get bucket size from dispatcher?
             const streamEndedCounter = await redis.get(`${pipelineID}-SHUFFLE-ENDED-counter`);
             if (!streamEndedCounter || Number(streamEndedCounter) < BUCKET_SIZE) {
                return;
@@ -376,7 +359,7 @@ async function shuffleMode() {
 
                const numKeys = Object.keys(keyValueStore[pipelineID]).length;
                if (numKeys)
-                  console.log(`[SHUFFLE MODE] [STREAM_ENDED] Sending ${numKeys} keys to reduce... from ${counter} messages`);
+                  console.log(`[SHUFFLE MODE] [STREAM_ENDED] Sending ${numKeys} keys to reduce... from ${counter} received messages`);
 
 
                await Promise.all(Object.keys(keyValueStore[pipelineID]).map(async (key) => {
@@ -400,7 +383,7 @@ async function shuffleMode() {
          keyValueStore[pipelineID][key].push(val.data);
 
          if (counter % 1000 == 0) {
-            console.log(`[SHUFFLE MODE] Receiving messages... Received: ${key} -> ${JSON.stringify(val.data)}`);
+            console.log(`[SHUFFLE MODE] Receiving messages... Just got: ${key} -> ${JSON.stringify(val.data)}`);
          }
 
       }
@@ -416,6 +399,7 @@ async function reduceMode() {
    await producer.connect();
 
    consumer.run({
+      partitionsConsumedConcurrently: 3, // Default: 1
       eachMessage: async ({ message }: { message: KafkaMessage }) => {
          counter++;
          if (!message.key || !message.value) return;
@@ -423,7 +407,7 @@ async function reduceMode() {
 
          const pipelineID = getPipelineID(message.key.toString());
 
-         if (!pipelineID) return; // TODO Throw error?
+         if (!pipelineID) return;
          const pipelineConfig = pipelines[pipelineID];
 
          // If no pipelineConfig is found, enqueue the message for later processing
@@ -441,11 +425,10 @@ async function processMessageReduce(message: KafkaMessage, pipelineConfig: Pipel
 
    
    if (kkey.toString().split('__').length !== 3) {
+      console.error(`[REDUCE MODE] Invalid key format: ${kkey}`);
       return;
-      // TODO throw error?
    }
    // Trim to get from the second __ till the end, i.e. the word
-   // TODO ensure safety
    const word = kkey.split('__')[2];
    const reducedResult = pipelineConfig.reduceFn(word, val.data);
    
@@ -492,7 +475,6 @@ async function main() {
    }
 }
 
-// TODO implement disconnect policy
 main().catch((error) => {
    console.error(`[ERROR] ${error.message}`);
    // If error is that kafka does not host the topic, wait and retry

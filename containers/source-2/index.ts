@@ -21,7 +21,6 @@ import {
    bitwiseHash,
    // @ts-ignore
 } from "./utils";
-// TODO ugly import
 
 console.log(`[SOURCE MODE] Starting source mode...`);
 const kafka = new Kafka({
@@ -39,6 +38,7 @@ const INPUT_FOLDER = './input';
 
 // Pipeline implementing the typical word-count example
 const createPipelineWordRand = (name: string): PipelineConfig => {
+   // if name contains '_', hash name
    if (name.includes('_')) {
       name = bitwiseHash(name).toString();
    };
@@ -46,7 +46,7 @@ const createPipelineWordRand = (name: string): PipelineConfig => {
    const suffix = Math.random().toString(16).substring(2, 8);
    name = `${name}${suffix}`
 
-   return {// TODO if name contains '_', hash name
+   return {
       pipelineID: 'word-rand-' + name,
       keySelector: (message: any) => message.word,
       dataSelector: (message: any) => message.data,
@@ -62,6 +62,7 @@ const createPipelineWordRand = (name: string): PipelineConfig => {
                   return char.repeat(randomRepeat);
                })
          }
+         // Take each word and make two versions, one lowercase and one uppercase
          return words.map((word: string) => ([
             { word: word.toLowerCase(), data: foo(word.toLowerCase()) },
             { word: word.toUpperCase(), data: foo(word.toUpperCase()) }
@@ -118,7 +119,6 @@ async function sourceMode() {
 
    await pipelinesProducer.connect();
 
-   // TODO make this customizable
 
    // This function is invoked for each file insise input folder
    const processFile = async (filePath: string) => {

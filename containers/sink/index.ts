@@ -61,7 +61,6 @@ async function outputMode() {
 }
 
 async function main() {
-   // TODO define alternative modes
    if (MODE === '--output') {
       await outputMode();
    }

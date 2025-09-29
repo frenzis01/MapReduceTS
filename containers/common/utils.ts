@@ -26,24 +26,18 @@ interface MessageValue {
 }
 
 function unboxKafkaMessage(msg: KafkaMessage) : {kkey: string, val: any } {
-   // TODO kind of ugly
-   // msg.value is not null when stream ends...
-   // Perhaps the null I inject is inside msg.value.data, not msg.value
    if (!msg || !msg.value) throw new Error(`[ERROR] Message value is null`);
-   // TODO is this default empty string necessary?
    const kkey = !msg.key ? "" : "" + msg.key.toString();
    if (isStreamEnded(msg)) return { kkey: kkey, val: JSON.parse(msg.value.toString()) };
-   // TODO Why is toString() necessary? If i put raw data when sending i get an error.
    const value = JSON.parse(msg.value.toString());
    const pipelineID = value.pipelineID;
-   // const pipelineConfig = pipelines[pipelineID];
-   const data = value.data;   // JSON.parse(value.data) should not be necessary
+   const data = value.data;
    const type = value.type;
    const val: MessageValue = { pipelineID, type, data }
    return { kkey, val }
 }
 
-// TODO numberOfMessages is used only by source... which does not exploit this file...
+// numberOfMessages is used only by source, it's not crucial
 function newStreamEndedMessage(pipelineID: string, numberOfMessages: any = STREAM_ENDED_VALUE): MessageValue {
    return {
       pipelineID: pipelineID,
@@ -68,9 +62,8 @@ function isStreamEnded(message: KafkaMessage): boolean {
    }
 }
 
-// TODO we would like to parameterize for more robust type checking
-// Perhaps we cannot do it since this would break the "pipelines" definition
-// i.e. having a collection of heterogeneous pipelines
+// we cannot parameterize for more robust type checking,
+// it would imply forcing types on the map and reduce signatures
 interface PipelineConfig {
    pipelineID: string;
    keySelector: (message: any) => string;
@@ -87,7 +80,6 @@ function newMessageValue(data: any, pipelineID: string): MessageValue {
    };
 }
 
-// TODO JSON stringify here or outside?
 function newMessageValueShuffled(data: any, pipelineID: string): MessageValue {
    return {
       pipelineID: pipelineID,
@@ -99,8 +91,6 @@ function newMessageValueShuffled(data: any, pipelineID: string): MessageValue {
 function newSourceRecord(pipelineID: string, key: number | string, data: any) {
    // if key is string, hash it
    if (typeof key === 'string') key = bitwiseHash(key);
-   // TODO 
-   // return newMessageValue( { key, data }, pipelineID);
    return {
       pipelineID: pipelineID,
       type: MessageType.STREAM_DATA,

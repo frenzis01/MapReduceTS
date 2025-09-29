@@ -30,7 +30,6 @@ import {
 
    // @ts-ignore
 } from "./utils";
-// TODO ugly import
 
 // @ts-ignore
 import { createClient } from 'redis';

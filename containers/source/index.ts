@@ -25,7 +25,6 @@ import {
    bitwiseHash
    // @ts-ignore
 } from "./utils";
-// TODO ugly import
 
 const kafka = new Kafka({
    clientId: 'mapreduce',
@@ -76,8 +75,6 @@ async function sourceMode() {
 
    const pipelinesProducer = kafka.producer();
    await pipelinesProducer.connect();
-
-   // TODO make this customizable
    
    // function invoked for each file insise input folder
    const processFile = async (filePath: string) => {
