@@ -3,7 +3,7 @@
  * Since we will run everything in Docker, so no problem with the installed modules.
  *  */
 // @ts-ignore
-import { Kafka, logLevel } from 'kafkajs';
+import { Kafka, logLevel, KafkaMessage } from 'kafkajs';
 
 // @ts-ignore
 const GROUP_ID = process.env.GROUP_ID || 'default-group';
@@ -27,7 +27,6 @@ import {
    SHUFFLE_TOPIC,
    REDUCE_TOPIC,
    OUTPUT_TOPIC,
-
    // @ts-ignore
 } from "./utils";
 
@@ -92,7 +91,8 @@ const createTopic = async () => {
 
 
 let counter = 0;
-// Source mode: Reads files from a folder and sends messages to Kafka
+let messagesPerPipeline: { [key: string]: number } = {};
+
 async function dispatcherMode() {
 
    const knownPipelines: { [key: string]: boolean } = {};
@@ -115,17 +115,18 @@ async function dispatcherMode() {
    await consumer.subscribe({ topic: DISPATCHER_TOPIC, fromBeginning: true });
 
    await consumer.run({
-      eachMessage: async ({ message }) => {
-
+      eachMessage: async ({ message } : { message: KafkaMessage }) => {
+         
          counter++;
+
          const { kkey, val } = unboxKafkaMessage(message);
          if (counter % 1000 == 0){
             console.log(`[DISPATCHER] Receving messages... Received message ${kkey}`);
          }
-
+         
          const pipelineID = getPipelineID(kkey);
          if (pipelineID === null) return;
-
+         
          if (!knownPipelines[pipelineID]) {
             knownPipelines[pipelineID] = true;
             await addPipeline(pipelineID, val);
@@ -134,20 +135,23 @@ async function dispatcherMode() {
          
 
          if (isStreamEnded(message)) {
+            const expectedMessages = val.data;
+            console.log(`[DISPATCHER] Stream ended for pipeline ${pipelineID}, messages received/expected: ${messagesPerPipeline[pipelineID]}/${expectedMessages}`);
             // send to all partitions
             for (let i = 0; i < BUCKET_SIZE; i++) {
                await producer.send({
                   topic: MAP_TOPIC,
                   messages: [{
                      key: `${pipelineID}__${STREAM_ENDED_KEY}`,
-                     value: JSON.stringify(newStreamEndedMessage(pipelineID, null)),
+                     value: JSON.stringify(newStreamEndedMessage(pipelineID, expectedMessages)),
                      partition: i
                   }],
                });
             }
             return;
          }
-
+         // TODO i have to make this pipelineWise
+         messagesPerPipeline[pipelineID]++;
 
          const { keyStr } = parseSourceKey(kkey);
          // check if keyStr can be converted to numer
@@ -155,7 +159,7 @@ async function dispatcherMode() {
          if (isNaN(k)) {
             k = bitwiseHash(keyStr);
             console.error(`Key ${keyStr} is not a number, hashed it to ${k}`);
-            return;
+            // return;
          }
 
          // index is used to compute the partition to send the message to
@@ -173,6 +177,7 @@ async function dispatcherMode() {
 
 
 async function addPipeline(pipelineID: string, val: any) {
+   messagesPerPipeline[pipelineID] = 0; // init counter
    await producer.send({
       topic: PIPELINE_UPDATE_TOPIC,
       messages: [{

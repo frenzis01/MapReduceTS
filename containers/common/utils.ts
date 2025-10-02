@@ -38,7 +38,7 @@ function unboxKafkaMessage(msg: KafkaMessage) : {kkey: string, val: any } {
 }
 
 // numberOfMessages is used only by source, it's not crucial
-function newStreamEndedMessage(pipelineID: string, numberOfMessages: any = STREAM_ENDED_VALUE): MessageValue {
+function newStreamEndedMessage(pipelineID: string, numberOfMessages: Number | null = STREAM_ENDED_VALUE): MessageValue {
    return {
       pipelineID: pipelineID,
       type: MessageType.STREAM_ENDED,
