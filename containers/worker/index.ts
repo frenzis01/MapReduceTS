@@ -93,7 +93,6 @@ async function listenForPipelineUpdates() {
 
    pipelinesConsumer.run({
       eachMessage: async ({ message }: { message: KafkaMessage }) => {
-         // console.log(`[Pipeline Update] [${GROUP_ID}/${WORKER_ID}] received msg with TS ${message.timestamp} | ${message.value}`);
          if (!message.value) return;
          const { kkey, val } = unboxKafkaMessage(message);
          const pipelineConfig = JSON.parse(val.data.toString());
@@ -112,9 +111,6 @@ async function listenForPipelineUpdates() {
          await redis.set(`${pipelineConfig.pipelineID}-REDUCE-received-counter`, '0');
 
          console.log(`[Pipeline Update] [${GROUP_ID}/${WORKER_ID}] Updated pipeline: ${pipelineConfig.pipelineID}`);
-         // console.log(JSON.stringify(Object.keys(unprocessedMessages)));
-         // console.log(`${pipelineConfig.pipelineID} | ${!unprocessedMessages[pipelineConfig.pipelineID]}`);
-         // TODO remove prints
          if (MODE === '--map' && unprocessedMessages[pipelineConfig.pipelineID]) {
             processUnprocessedMessages(pipelineConfig, processMessageMap);
          }
@@ -163,10 +159,6 @@ async function mapMode() {
    await consumer.subscribe({ topic: MAP_TOPIC, fromBeginning: true });
 
    await producer.connect();
-
-   // Needed only if using printTopicMetadata
-   // const admin = await kafka.admin();
-   // await admin.connect();
 
    // We are already connected to redis 
    // redis is needed for synchronization purposes
@@ -310,7 +302,6 @@ async function shuffleMode() {
       // This breaks the logic behind synchronizing
       // partitionsConsumedConcurrently: 3, // Default: 1
       eachMessage: async ({ message }: { message: KafkaMessage }) => {
-         // console.log(`[${MODE}/${WORKER_ID}] -> ${!message.key || !message.value} | ${message.key?.toString()} ${message.value?.toString()}`)
          if (!message.key || !message.value) return;
 
          counter++;
@@ -359,7 +350,6 @@ async function shuffleMode() {
 
                const outgoingMessagesCount = Number(await redis.get(`${pipelineID}-SHUFFLE-outgoing-counter`));
 
-               const tmpValue = JSON.stringify(newStreamEndedMessage(pipelineID, outgoingMessagesCount));
                for (let i = 0; i < BUCKET_SIZE; i++) {
                   await producer.send({
                      topic: SHUFFLE_TOPIC,
@@ -393,8 +383,6 @@ async function shuffleMode() {
                }));
 
                await redis.incr(`${pipelineID}-SHUFFLE-ENDED-counter`);
-               const streamEndedCounter = await redis.get(`${pipelineID}-SHUFFLE-ENDED-counter`);
-               // console.log(`[SHUFFLE MODE] Overincremented STREAM_ENDED messages ${streamEndedCounter}/${BUCKET_SIZE}... for ${pipelineID}`);
             }
 
             if (Number(streamEndedCounter) === BUCKET_SIZE * 2) {

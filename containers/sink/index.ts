@@ -42,7 +42,6 @@ async function outputMode() {
    consumer.run({
       eachMessage: async ({ message }: { message: KafkaMessage }) => {
          counter++;
-         // console.log(`[${MODE}/${WORKER_ID}]`)
          if (!message.value || !message.key) return;
          const key = message.key?.toString();
          const value = JSON.parse(message.value.toString());

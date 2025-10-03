@@ -150,7 +150,6 @@ async function dispatcherMode() {
             }
             return;
          }
-         // TODO i have to make this pipelineWise
          messagesPerPipeline[pipelineID]++;
 
          const { keyStr } = parseSourceKey(kkey);
@@ -159,7 +158,6 @@ async function dispatcherMode() {
          if (isNaN(k)) {
             k = bitwiseHash(keyStr);
             console.error(`Key ${keyStr} is not a number, hashed it to ${k}`);
-            // return;
          }
 
          // index is used to compute the partition to send the message to

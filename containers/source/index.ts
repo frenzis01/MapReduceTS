@@ -51,7 +51,6 @@ const createPipelineWordCount = (name: string): PipelineConfig => {
       keySelector: (message: any) => message.word,
       dataSelector: (message: any) => message.count,
       mapFn: (value: any) => {
-         // console.log(`[MAP MODE] Mapping type of value: ${typeof value}:${JSON.stringify(value)}`);
          // Filter is used to avoid having empty strings "" in the array	
          const words = value.split(/[^a-zA-Z0-9]+/).filter(Boolean);
          // Return an array with a single element, which is an array of (word, 1)
@@ -109,7 +108,6 @@ async function sourceMode() {
 
          console.log(`[SOURCE MODE] Sending ${data.length} records to DISPATCHER...`);
          data.forEach((record: any, index: number) => {
-            // console.log(`[SOURCE MODE] type of record : ${typeof record} ${index} / ${pipelineID}`);
             producer.send({
                topic: DISPATCHER_TOPIC,
                // We add an index to the key as a reference for partitioning
@@ -121,7 +119,6 @@ async function sourceMode() {
                   // partition: (index) % 3
                }],
             });
-            // console.log(`[SOURCE MODE] Sent record: ${JSON.stringify(record)}`);
 
             // Compute locally and sequentially
             const results = pipelineWordCount.mapFn(record);
@@ -144,13 +141,11 @@ async function sourceMode() {
           * This helps to get a reference to check if the final parallelized result is correct
           */
          const reduced = Object.keys(shuffled).map((key) => {
-            // console.log(`[SOURCE MODE/seq] Reducing: ${key}`);
             return [key, pipelineWordCount.reduceFn(key, shuffled[key])];
          });
 
          console.log(`[SOURCE MODE/seq] Sending ${reduced.length} sequentially reduced records to OUTPUT_TOPIC...`);
          reduced.forEach(async ([key, value]) => {
-            // console.log(`[SOURCE MODE/seq] Sending reduced: ${key}: ${value}`);
             await producer.send({
                topic: OUTPUT_TOPIC,
                messages: [{
