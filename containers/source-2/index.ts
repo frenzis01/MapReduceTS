@@ -50,7 +50,7 @@ const createPipelineWordRand = (name: string): PipelineConfig => {
       pipelineID: 'word-rand-' + name,
       keySelector: (message: any) => message.word,
       dataSelector: (message: any) => message.data,
-      mapFn: (key: string = "", value: any) => {
+      mapFn: (value: any, key: string = "") => {
          // Filter is used to avoid having empty strings "" in the array	
          const words = value.split(/[^a-zA-Z0-9]+/).filter(Boolean);
          const foo = (s: string) => {
@@ -103,7 +103,8 @@ const createPipelineWordRand = (name: string): PipelineConfig => {
             }
             count++;
          }
-         return count;
+         // Brackets [] because we expect an array as output
+         return [{key: key, count: count}];
       }
    }
 };
@@ -166,7 +167,7 @@ async function sourceMode() {
              * We compute sequentially and locally the map and reduce functions
              * so that we can compare the results with the parallelized version
              */
-            const results = pipelineWordRand.mapFn(record);
+            const results = pipelineWordRand.mapFn(record, ""); // we do not care about the key here
             results
                .flat()
                .forEach((v: any) => {
@@ -186,16 +187,19 @@ async function sourceMode() {
           * This helps to get a reference to check if the final parallelized result is correct
           */
          const reduced = Object.keys(shuffled).map((key) => {
-            return [key, pipelineWordRand.reduceFn(key, shuffled[key])];
+            return pipelineWordRand.reduceFn(key, shuffled[key]);
          });
 
-         reduced.forEach(async ([key, value]) => {
+         reduced.forEach(async (value) => {
+            // value is a an array of objects like [{key: 'aa', value: ...}, {...}]
+            const messages = value.map((item: { key: any; value: any; }) => ({
+               key: item.key,
+               value: JSON.stringify(newMessageValue(item.value, "seq-word-rand-" + path.basename(filePath))),
+            }));
+
             await producer.send({
                topic: OUTPUT_TOPIC,
-               messages: [{
-                  key: key,
-                  value: JSON.stringify(newMessageValueShuffled(value, "seq-word-rand" + path.basename(filePath))),
-               }],
+               messages: messages,
             });
          });
          console.log(`[SOURCE] Sequential computation done`);

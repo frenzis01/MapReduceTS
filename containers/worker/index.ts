@@ -264,7 +264,7 @@ async function processMessageMap(message: KafkaMessage, pipelineConfig: Pipeline
    }
 
    messagesPerPipeline[pipelineID]++;
-   const mapResults = pipelineConfig.mapFn(val.data);
+   const mapResults = pipelineConfig.mapFn(val.data, kkey);
 
 
    for (const arr of mapResults) {
@@ -362,10 +362,9 @@ async function shuffleMode() {
             if (!(await redis.get(`${pipelineID}-SHUFFLE-READY-flag`))) {
                await redis.set(`${pipelineID}-SHUFFLE-READY-flag`, `true`);
 
-               let receivedMessages = await redis.get(`${pipelineID}-SHUFFLE-received-counter`);
+               const receivedMessages = await redis.get(`${pipelineID}-SHUFFLE-received-counter`);
                const expectedMessages = val.data;
 
-               if (receivedMessages > expectedMessages) receivedMessages = expectedMessages;
                console.log(`[SHUFFLE MODE] Received all STREAM_ENDED messages. Got ${receivedMessages}/${expectedMessages} messages... for ${pipelineID}`);
 
                const outgoingMessagesCount = Number(await redis.get(`${pipelineID}-SHUFFLE-outgoing-counter`));
@@ -534,13 +533,17 @@ async function processMessageReduce(message: KafkaMessage, pipelineConfig: Pipel
    const reducedResult = pipelineConfig.reduceFn(word, val.data);
    
    if (counter % 300 == 0) {
-      console.log(`[REDUCE MODE] Reducing data... Reduced: ${word} -> ${reducedResult}`);
+      console.log(`[REDUCE MODE] Reducing data... Reduced: ${word} -> ${reducedResult[0].value}`);
    } 
 
 
+   // Reduced result is an array of objects with `key` and `value`
    await producer.send({
       topic: OUTPUT_TOPIC,
-      messages: [{ "key": word, value: JSON.stringify(newMessageValue(reducedResult, val.pipelineID)) }],
+      messages: reducedResult.map((item: { key: any; value: any; }) => ({
+         key: item.key,
+         value: JSON.stringify(newMessageValue(item.value, val.pipelineID))
+      })),
    });
 }
 

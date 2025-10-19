@@ -49,7 +49,7 @@ const createPipelineWordCount = (name: string): PipelineConfig => {
       pipelineID: 'word-count-' + name,
       keySelector: (message: any) => message.word,
       dataSelector: (message: any) => message.count,
-      mapFn: (key: string = "", value: any) => {
+      mapFn: (value: any, key: string = "") => {
          // Filter is used to avoid having empty strings "" in the array	
          const words = value.split(/[^a-zA-Z0-9]+/).filter(Boolean);
          // Return an array with a single element, which is an array of (word, 1)
@@ -57,7 +57,8 @@ const createPipelineWordCount = (name: string): PipelineConfig => {
       },
       reduceFn: (key: string, values: any[]) => {
          // Reduce takes as input a key and an array of `data` (count)
-         return values.reduce((acc, count) => acc + count, 0);
+         // brackets [] because we expect an array as output
+         return [{key: key, value: values.reduce((acc, count) => acc + count, 0)}]; 
       }
    }
 };
@@ -123,7 +124,7 @@ async function sourceMode() {
              * so that we can compare the results with the parallelized version
              */
             // Compute locally and sequentially
-            const results = pipelineWordCount.mapFn(record);
+            const results = pipelineWordCount.mapFn(record, ""); // we do not care about the key here
             // [[{word: 'abg', count: 1}], [{word: 'abg', count: 1}], [{word: 'agg', count: 1}]]
             results.forEach((v: Object[]) => {
                v.forEach((v) => {
@@ -144,17 +145,24 @@ async function sourceMode() {
           * This helps to get a reference to check if the final parallelized result is correct
           */
          const reduced = Object.keys(shuffled).map((key) => {
-            return [key, pipelineWordCount.reduceFn(key, shuffled[key])];
+            return pipelineWordCount.reduceFn(key, shuffled[key]);
          });
 
          console.log(`[SOURCE MODE/seq] Sending ${reduced.length} sequentially reduced records to OUTPUT_TOPIC...`);
-         reduced.forEach(async ([key, value]) => {
+
+         // reduceFn returns an array of objects like [{key: 'aa', value: ...}, {...}]
+         // so reduced is an array of arrays
+
+         reduced.forEach(async (value) => {
+            // value is a an array of objects like [{key: 'aa', value: ...}, {...}]
+            const messages = value.map((item: { key: any; value: any; }) => ({
+               key: item.key,
+               value: JSON.stringify(newMessageValue(item.value, "seq-word-count-" + path.basename(filePath))),
+            }));
+
             await producer.send({
                topic: OUTPUT_TOPIC,
-               messages: [{
-                  key: key,
-                  value: JSON.stringify(newMessageValueShuffled(value, "seq-word-count-"+ path.basename(filePath))),
-               }],
+               messages: messages,
             });
          });
 
