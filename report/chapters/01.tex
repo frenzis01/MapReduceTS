@@ -38,7 +38,7 @@ This report will initially describe the main features and architecture of the im
    git clone git@github.com:frenzis01/MapReduceTS.git
    cd MapReduceTS
    # to clean output folder and remove old containers
-   ./clean_output.sh && docker container prune -f && docker compose up
+   ./clean_output.sh && docker container prune -f && docker compose up --build
    # CTRL+C to stop the execution
    ./compare.sh # to compare distributed vs sequential results
 \end{lstlisting}

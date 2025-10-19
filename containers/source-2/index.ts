@@ -104,7 +104,7 @@ const createPipelineWordRand = (name: string): PipelineConfig => {
             count++;
          }
          // Brackets [] because we expect an array as output
-         return [{key: key, count: count}];
+         return [{key: key, value: count}];
       }
    }
 };
