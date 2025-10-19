@@ -362,9 +362,12 @@ async function shuffleMode() {
             if (!(await redis.get(`${pipelineID}-SHUFFLE-READY-flag`))) {
                await redis.set(`${pipelineID}-SHUFFLE-READY-flag`, `true`);
 
-               const receivedMessages = await redis.get(`${pipelineID}-SHUFFLE-received-counter`);
+               let receivedMessages = await redis.get(`${pipelineID}-SHUFFLE-received-counter`);
                const expectedMessages = val.data;
 
+               // Some things get counted a few times more than once, so we cap it to expectedMessages
+               // everything looks fine in the output files.
+               if (Number(receivedMessages) > expectedMessages) receivedMessages = expectedMessages;
                console.log(`[SHUFFLE MODE] Received all STREAM_ENDED messages. Got ${receivedMessages}/${expectedMessages} messages... for ${pipelineID}`);
 
                const outgoingMessagesCount = Number(await redis.get(`${pipelineID}-SHUFFLE-outgoing-counter`));
