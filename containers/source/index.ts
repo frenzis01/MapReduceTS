@@ -20,7 +20,6 @@ import {
    stringifyPipeline,
    STREAM_ENDED_KEY,
    DISPATCHER_TOPIC,
-   PIPELINE_UPDATE_TOPIC,
    OUTPUT_TOPIC,
    bitwiseHash
    // @ts-ignore
@@ -50,7 +49,7 @@ const createPipelineWordCount = (name: string): PipelineConfig => {
       pipelineID: 'word-count-' + name,
       keySelector: (message: any) => message.word,
       dataSelector: (message: any) => message.count,
-      mapFn: (value: any) => {
+      mapFn: (key: string = "", value: any) => {
          // Filter is used to avoid having empty strings "" in the array	
          const words = value.split(/[^a-zA-Z0-9]+/).filter(Boolean);
          // Return an array with a single element, which is an array of (word, 1)
@@ -80,8 +79,6 @@ async function sourceMode() {
       console.log(`[SOURCE MODE] Processing file: ${filePath}/${fs.existsSync(filePath)}`);
       // if file exists and is .txt
       if (fs.existsSync(filePath) && fs.lstatSync(filePath).isFile() && filePath.endsWith('.txt') 
-         // TODO debug line
-         // && filePath.includes('short')
       ) {
          console.log(`[SOURCE MODE] Found new file: ${filePath}`);
          // if filepath is empty, return. This is a safeguard, should not happen
@@ -111,15 +108,20 @@ async function sourceMode() {
             producer.send({
                topic: DISPATCHER_TOPIC,
                // We add an index to the key as a reference for partitioning
-               // we specify the partition to send the message to
-               // note that this is an upper bound on the parallelism degree.
                messages: [{
                   key: pipelineID + "__source-record__" + index,
                   value: JSON.stringify(newMessageValue(record, pipelineID)),
-                  // partition: (index) % 3
+                  // NO explicit partitioning here, dispatcher will handle it
+                  // partition: ...f(index)...
                }],
             });
 
+            // ------------ SEQUENTIAL COMPUTATION ------------
+            /**
+             * SEQUENTIAL COMPUTATION
+             * We compute sequentially and locally the map and reduce functions
+             * so that we can compare the results with the parallelized version
+             */
             // Compute locally and sequentially
             const results = pipelineWordCount.mapFn(record);
             // [[{word: 'abg', count: 1}], [{word: 'abg', count: 1}], [{word: 'agg', count: 1}]]
@@ -137,6 +139,7 @@ async function sourceMode() {
 
 
          /**
+          * SEQUENTIAL COMPUTATION
           * Reduce locally and sequentially
           * This helps to get a reference to check if the final parallelized result is correct
           */
@@ -156,7 +159,7 @@ async function sourceMode() {
          });
 
 
-         // Send to shuffle consumer special value to start feeding the reduce
+         // Send special value to signal the end of the data stream
          console.log(`[SOURCE MODE] Sending stream ended message to DISPATCHER...`);
          await producer.send({
             topic: DISPATCHER_TOPIC,

@@ -48,6 +48,7 @@ const redis = createClient({
 
 
 const admin = kafka.admin();
+// Dispatcher is responsible for creating topics and dispatching messages to the map topic
 const createTopic = async () => {
    await admin.connect();
    await admin.createTopics({
@@ -90,7 +91,10 @@ const createTopic = async () => {
 };
 
 
+// Global counter for received messages
 let counter = 0;
+
+// Messages received per pipeline
 let messagesPerPipeline: { [key: string]: number } = {};
 
 async function dispatcherMode() {
@@ -135,9 +139,10 @@ async function dispatcherMode() {
          
 
          if (isStreamEnded(message)) {
+            // The source is done sending messages for this pipeline
             const expectedMessages = val.data;
             console.log(`[DISPATCHER] Stream ended for pipeline ${pipelineID}, messages received/expected: ${messagesPerPipeline[pipelineID]}/${expectedMessages}`);
-            // send to all partitions
+            // send to all partitions so that every mappers gets at least one end signal
             for (let i = 0; i < BUCKET_SIZE; i++) {
                await producer.send({
                   topic: MAP_TOPIC,
@@ -150,6 +155,7 @@ async function dispatcherMode() {
             }
             return;
          }
+         
          messagesPerPipeline[pipelineID]++;
 
          const { keyStr } = parseSourceKey(kkey);
@@ -175,6 +181,8 @@ async function dispatcherMode() {
 
 
 async function addPipeline(pipelineID: string, val: any) {
+   // Propagate the pipeline definition to the dedicated topic
+   // So that all workers can consume it and have the pipeline definition
    messagesPerPipeline[pipelineID] = 0; // init counter
    await producer.send({
       topic: PIPELINE_UPDATE_TOPIC,

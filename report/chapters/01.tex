@@ -40,6 +40,7 @@ This report will initially describe the main features and architecture of the im
    # to clean output folder and remove old containers
    ./clean_output.sh && docker container prune -f && docker compose up
    # CTRL+C to stop the execution
+   ./compare.sh # to compare distributed vs sequential results
 \end{lstlisting}
 \note{\footnotesize \texttt{source} nodes also compute the processing sequentially, allowing to compare the distribute MapReduce results with the sequential ones.}}
 \newpage
@@ -99,19 +100,16 @@ Hence, \ul{we can dynamically add workers to the pool to scale our application, 
 
 \begin{lstlisting}[caption={Sending MAP record to shuffle topic},label={lst:sendingMapRecord}]
    await producer.send({
-      topic: `${SHUFFLE_TOPIC}`,
-      messages: [{
-         key: resKey, // key resulting from the map operation
-         value: JSON.stringify(newMessageValue(resData, pipelineID)),
-         // partition: index
-         // 'partition' is not set, so that it is automatically computed based on resKey 
+      topic: SHUFFLE_TOPIC,
+      // items with the same key will go to the same partition, i.e. the same shuffler
+      messages: [{ 
+         key: key, // key = keySelector(mapResult)
+         value: JSON.stringify(newMessageValue(data, pipelineID)) // data = dataSelector(mapResult)
       }],
    });
 \end{lstlisting}
-Encoding the \verb|pipelineID| in the \verb|value| field allows us to distinguish the pipeline to which the data belongs; equivalently, we could also encode it and parse the \verb|key| field of a Kafka message, having something like \\ \verb|key: `${pipelineID}__map-record__{resKey}`|, but it's a less flexible and robust approach.\\
+Encoding the \verb|pipelineID| in the \verb|value| field allows us to distinguish the pipeline to which the data belongs; equivalently, we could also encode it and parse the \verb|key| field of a Kafka message, having something like \\ \verb|key: `${pipelineID}__map-record__{key}`|, but it's a less flexible and robust approach.\\
 In this way, \ul{multiple data streams may be processed simultaneously with different} \verb|map| and \verb|reduce| \ul{functions for each of them}.
-
-% // TODO non ricordo cosa intendessi qui sopra riguardo la key. Dovrei anche scrivere cosa è resKey
 
 \section{Message retransmission issues}
 \subsection{Kafka message retransmission}
@@ -136,7 +134,8 @@ Having a topic for each data stream allows for separate message committing, henc
 \note{This approach is implemented in the \texttt{multi-topic} branch of the repo.}
 
 \ul{This implementation is error prone}. Error messages are displayed due to rebalancing, which is expected, but something else happens under the hood which I couldn't figure out, leading to message duplication and other issues.\\
-Even though the code looked correct from a theoretical point of view, in practice something doesn't work out, possibly due to the approach attempting to stretch out too much Kafka's natural behavior. Nevertheless, I still thought that a brief discussion on the idea behind this implementation could be interesting.  
+Even though the code looked correct from a theoretical point of view, in practice something doesn't work out, possibly due to the approach attempting to stretch out too much Kafka's natural behavior.\\
+Nevertheless, I still thought that a brief discussion on the idea behind this implementation could be interesting.  
 
 The \texttt{dispatcher} node, upon receiving a new pipeline from a \texttt{source}, creates two topics specific for it:
 \begin{lstlisting}
@@ -235,22 +234,21 @@ To solve this we can use a \textbf{fixed} explicit number of partitions per topi
 This will be one of the few data structures shared among nodes.
 \note{The number of partitions can be adjusted by the user to fit the needs of the application.} 
 
-\begin{lstlisting}[label={lst:bucketsize},caption={BUCKET\_SIZE represents the number of partitions per topic},captionpos={top}]
-   for (let i = 0; i < BUCKET_SIZE; i++) {
+\begin{lstlisting}[label={lst:bucketsize},caption={BUCKET\_SIZE represents the number of partitions per topic.},captionpos={top}]
+for (let i = 0; i < BUCKET_SIZE; i++) {
       await producer.send({
-         topic: `${MAP_TOPIC}---${pipelineID}`,
+         topic: MAP_TOPIC,
          messages: [{
             key: `${pipelineID}__${STREAM_ENDED_KEY}`,
-            value: JSON.stringify(newStreamEndedMessage(pipelineID, null)),
+            value: JSON.stringify(newStreamEndedMessage(pipelineID, expectedMessages)),
             partition: i
          }],
       });
    }
 \end{lstlisting}
 
-We can send the message to all the partitions of the topic as depicted in Lst. \ref{lst:bucketsize}, so that it is guaranteed that all consumers will receive it. If there are less workers than partitions, some of them will receive the message multiple times, but we will address this later on.
-
-% // TODO lo spiego davvero?
+We can send the message to all the partitions of the topic as depicted in Lst. \ref{lst:bucketsize}, so that it is guaranteed that all consumers will receive it. If there are less workers than partitions, some of them will receive the message multiple times.\\
+More details on handling \verb|STREAM_ENDED| messages are discussed in Sec. \ref{sec:streamEnding}, and in the scheme in Fig. \ref{fig:redisSynch}.
 
 \subsubsection{Message ordering}
 It is important to note that \ul{Kafka guarantees message ordering only within a partition}, not across partitions.
@@ -270,6 +268,7 @@ Below we have a scheme wrapping up the overall messaging architecture of the app
 \end{figure}
 
 \subsection{Deeper into the stream ending}
+\label{sec:streamEnding}
 
 \subsubsection{Mappers}
 A mapper receiving its \verb|STREAM_ENDED| message cannot directly propagate it to the shuffle topic, because other mappers may still be processing source records.
@@ -277,7 +276,8 @@ A mapper receiving its \verb|STREAM_ENDED| message cannot directly propagate it 
 The only way I could find to guarantee that all mappers have finished processing is to use a \texttt{redis} \textbf{shared counter}.
 When a mapper receives the \verb|STREAM_ENDED| message, it increments the counter in \texttt{redis}.
 If the counter equals the number of mappers, then the mapper can propagate the \verb|STREAM_ENDED| message to the shuffle topic.
-This is shown in Listing \ref{lst:streamEndedMapper}.
+This is shown in Listing \ref{lst:streamEndedMapper}.\\
+A schema in Fig. \ref{fig:redisSynch} wraps up the logic.
 
 \begin{lstlisting}[label={lst:streamEndedMapper}, caption={Handling the STREAM\_ENDED message in a mapper},captionpos={top}]
    // Increment the counter for the number of ended messages
@@ -373,6 +373,7 @@ The major challenge that may arise with this type of system appears to be messag
 An enhancement in the computational performance of a single operation may be negligible or ineffective if not supported by an efficient and robust way to communicate the result of such operation.
 In this basic implementation, the Kafka broker acts as the main bottleneck, since it must handle all messages. For very basic operations (such as word counting), the overhead introduced by Kafka's message passing, even if batching is used, may be more significant than the processing itself.
 
-A posteriori, an architecture similar to the adopted one may better suit node clusters that do not have to work as ``sequentially'' as in the \textsc{MapReduce} framework, where the information exchanged among them is less intensive and does not enforce strict process ordering, allowing for better exploitation of Kafka's design while avoiding synchronization delays.
+A posteriori, an architecture similar to the adopted one may better suit node clusters that do not have to work as ``sequentially'' as in the \textsc{MapReduce} framework, where the information exchanged among them is less intensive and does not enforce strict process ordering, allowing for better exploitation of Kafka's design while avoiding synchronization delays.\\
+Hence, I could observe how an initial poor design choice ---in this case regarding tool selection--- can undermine the success of an implementation, and how potential flaws may be hidden in technical details that are not immediately apparent at first glance.
 
 The aim of the project was to pose challenges whose resolution has led me to gain a deeper understanding of Kafka, MapReduce, TypeScript ---which I had never used before---, and other concepts such as Synchronization and Scalability.

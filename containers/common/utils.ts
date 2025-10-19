@@ -68,8 +68,8 @@ interface PipelineConfig {
    pipelineID: string;
    keySelector: (message: any) => string;
    dataSelector: (message: any) => any;
-   mapFn: (value: any) => any[];
-   reduceFn: (key: string, values: any[]) => any;
+   mapFn: (key: string, value: any) => any[];
+   reduceFn: (key: string, values: any[]) => any[];
 }
 
 function newMessageValue(data: any, pipelineID: string): MessageValue {

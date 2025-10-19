@@ -50,8 +50,8 @@ const createPipelineWordRand = (name: string): PipelineConfig => {
       pipelineID: 'word-rand-' + name,
       keySelector: (message: any) => message.word,
       dataSelector: (message: any) => message.data,
-      // Filter is used to avoid having empty strings "" in the array	
-      mapFn: (value: any) => {
+      mapFn: (key: string = "", value: any) => {
+         // Filter is used to avoid having empty strings "" in the array	
          const words = value.split(/[^a-zA-Z0-9]+/).filter(Boolean);
          const foo = (s: string) => {
             // Take each letter and repeat it a random number of times
@@ -124,8 +124,6 @@ async function sourceMode() {
    const processFile = async (filePath: string) => {
       // if file exists and is .txt
       if (fs.existsSync(filePath) && fs.lstatSync(filePath).isFile() && filePath.endsWith('.txt')
-         // TODO debug line
-         // && filePath.includes('short')
       ) {
          console.log(`[SOURCE MODE] Processing file: ${filePath}`);
 
@@ -204,7 +202,7 @@ async function sourceMode() {
          // ------------ END OF SEQUENTIAL COMPUTATION ------------
 
 
-         // Send to special value to signal the end of the data stream
+         // Send special value to signal the end of the data stream
          console.log(`[SOURCE MODE] Sending stream ended message to DISPATCHER...`);
          await producer.send({
             topic: DISPATCHER_TOPIC,

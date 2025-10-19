@@ -20,7 +20,6 @@ import {
    newMessageValue,
    newMessageValueShuffled,
    PipelineConfig,
-   bitwiseHash,
    getPipelineID,
    STREAM_ENDED_KEY,
    PIPELINE_UPDATE_TOPIC,
@@ -45,8 +44,8 @@ const redis = createClient({
    url: 'redis://redis:6379' // Redis URL matches the service name in docker-compose
 })
 
-// counter for received messages
-let counter = 0;
+// counters for received and outgoing messages
+let counter = 0;  // global counter for logging purposes
 let messagesPerPipeline: { [key: string]: number } = {};
 let outgoingMessages: { [key: string]: number } = {};
 
@@ -72,7 +71,8 @@ async function getBucketSizeWithRetry(maxRetries = 5) {
       retries++;
       console.log(`Retry ${retries}/${maxRetries}: BUCKET_SIZE not set. Retrying in 1 second...`);
 
-      await new Promise(resolve => setTimeout(resolve, 1000)); // Wait for 1 second
+      // Wait for 1 second
+      await new Promise(resolve => setTimeout(resolve, 1000)); 
    }
 
    throw new Error('BUCKET_SIZE not set after maximum retries.');
@@ -82,6 +82,7 @@ async function getBucketSizeWithRetry(maxRetries = 5) {
 // Unique worker ID
 const WORKER_ID = `worker-${Math.random().toString(36).substring(2, 15)}`;
 
+// Store known pipeline configurations
 let pipelines: { [pipelineID: string]: PipelineConfig } = {};
 
 // Listen for pipeline updates
@@ -96,6 +97,7 @@ async function listenForPipelineUpdates() {
          if (!message.value) return;
          const { kkey, val } = unboxKafkaMessage(message);
          const pipelineConfig = JSON.parse(val.data.toString());
+         // Store pipeline
          pipelines[pipelineConfig.pipelineID] = {
             pipelineID: pipelineConfig.pipelineID,
             keySelector: eval(pipelineConfig.keySelector),
@@ -111,6 +113,7 @@ async function listenForPipelineUpdates() {
          await redis.set(`${pipelineConfig.pipelineID}-REDUCE-received-counter`, '0');
 
          console.log(`[Pipeline Update] [${GROUP_ID}/${WORKER_ID}] Updated pipeline: ${pipelineConfig.pipelineID}`);
+         // In case there are unprocessed messages for this pipeline, process them now that we have the definition
          if (MODE === '--map' && unprocessedMessages[pipelineConfig.pipelineID]) {
             processUnprocessedMessages(pipelineConfig, processMessageMap);
          }
@@ -151,6 +154,13 @@ function enqueueUnprocessedMessage(message: KafkaMessage, pipelineID: string) {
    return; // Skip processing this message for now
 }
 
+/**
+ * 
+ * 
+ * ------------------------- MAP MODE -------------------------
+ * 
+ * 
+ */
 
 // Map mode: Applies the map function to incoming messages
 async function mapMode() {
@@ -272,13 +282,21 @@ async function processMessageMap(message: KafkaMessage, pipelineConfig: Pipeline
 
          await producer.send({
             topic: SHUFFLE_TOPIC,
-            // items with the same key should go to the same partition, i.e. the same shuffler
+            // items with the same key will go to the same partition, i.e. the same shuffler
             messages: [{ key: key, value: JSON.stringify(newMessageValue(data, pipelineID)) }],
          });
       }
    }
 }
 
+
+/**
+ * 
+ * 
+ * ------------------------- SHUFFLE MODE -------------------------
+ * 
+ * 
+ */
 
 /**
  * Shuffle mode: Groups messages by key for each stream/pipeline
@@ -344,8 +362,10 @@ async function shuffleMode() {
             if (!(await redis.get(`${pipelineID}-SHUFFLE-READY-flag`))) {
                await redis.set(`${pipelineID}-SHUFFLE-READY-flag`, `true`);
 
-               const receivedMessages = await redis.get(`${pipelineID}-SHUFFLE-received-counter`);
+               let receivedMessages = await redis.get(`${pipelineID}-SHUFFLE-received-counter`);
                const expectedMessages = val.data;
+
+               if (receivedMessages > expectedMessages) receivedMessages = expectedMessages;
                console.log(`[SHUFFLE MODE] Received all STREAM_ENDED messages. Got ${receivedMessages}/${expectedMessages} messages... for ${pipelineID}`);
 
                const outgoingMessagesCount = Number(await redis.get(`${pipelineID}-SHUFFLE-outgoing-counter`));
@@ -420,6 +440,16 @@ async function shuffleMode() {
       }
    });
 }
+
+
+
+/**
+ * 
+ * 
+ * ------------------------- REDUCE MODE -------------------------
+ * 
+ * 
+ */
 
 // Reduce mode: Applies the reduce function and forwards results
 async function reduceMode() {
@@ -524,6 +554,14 @@ const getBucketSizeWrapper = async () => {
          console.error(error.message);
       });
 }
+
+/**
+ * 
+ * 
+ * ------------------------- MAIN -------------------------
+ * 
+ * 
+ */
 
 async function main() {
    // We need redis for some shared state to synchronize on shuffling
