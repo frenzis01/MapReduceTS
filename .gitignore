@@ -1,0 +1,7 @@
+# input/*
+output/*
+.env
+report/*.mtc*
+report/*.maf
+report/*.synctex.gz
+**.aux
