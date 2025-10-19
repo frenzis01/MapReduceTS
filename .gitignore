@@ -1,5 +1,5 @@
 # input/*
-output/*
+output/*.txt
 .env
 report/*.mtc*
 report/*.maf
